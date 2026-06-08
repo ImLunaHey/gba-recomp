@@ -56,6 +56,13 @@ export function renderSprites(ppu: Ppu, y: number): void {
     const palBank = (a2 >> 12) & 0xF;
     const priority = (a2 >> 10) & 3;
     const tileIdx = a2 & 0x3FF;
+    // OAM mosaic: OBJ has its own block size in MOSAIC bits 8-15
+    // (low nibble = horizontal-1, second nibble = vertical-1). When
+    // a0 bit 12 is set, quantize the sample coords within the sprite
+    // so the textured output looks chunky.
+    const mosaicOn = (a0 & 0x1000) !== 0;
+    const mosH = mosaicOn ? (((ppu.mosaic >> 8) & 0xF) + 1) : 1;
+    const mosV = mosaicOn ? (((ppu.mosaic >> 12) & 0xF) + 1) : 1;
 
     const semi = mode === 1;
     const objWindow = mode === 2;
@@ -92,14 +99,18 @@ export function renderSprites(ppu: Ppu, y: number): void {
     if (!affine) {
       const hflipFlag = (a1 & 0x1000) !== 0;
       const vflipFlag = (a1 & 0x2000) !== 0;
-      let ty = inSpriteY;
+      // Apply OBJ mosaic by quantizing the sample coords within the
+      // sprite to the configured block size before flip is applied.
+      const mosY = mosaicOn ? (inSpriteY - (inSpriteY % mosV)) : inSpriteY;
+      let ty = mosY;
       if (vflipFlag) ty = h - 1 - ty;
       const tileRow = ty >> 3;
       const inTileY = ty & 7;
       for (let px = 0; px < w; px++) {
         const screenX = xPos + px;
         if (screenX < 0 || screenX >= 240) continue;
-        let tx = px;
+        const mosX = mosaicOn ? (px - (px % mosH)) : px;
+        let tx = mosX;
         if (hflipFlag) tx = w - 1 - tx;
         const tileCol = tx >> 3;
         const inTileX = tx & 7;

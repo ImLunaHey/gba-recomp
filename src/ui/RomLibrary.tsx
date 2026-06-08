@@ -1,5 +1,24 @@
 import { useEffect, useState } from 'react';
+import { unzipSync } from 'fflate';
 import { addRom, deleteRom, listRoms, type RomMeta } from './romStore';
+
+// Pull every .gba member out of a ZIP archive. Returns an array of
+// {filename, bytes} pairs so the import code can treat them like plain
+// File uploads. Skips folder entries and any non-.gba members.
+function extractGbaFromZip(zipBytes: Uint8Array): Array<{ filename: string; bytes: Uint8Array }> {
+  const out: Array<{ filename: string; bytes: Uint8Array }> = [];
+  // fflate's unzipSync returns { [path]: Uint8Array } synchronously.
+  // For 16-32 MB ROMs in a zip this typically completes in 30-60 ms.
+  const entries = unzipSync(zipBytes, {
+    filter: (file) => file.name.toLowerCase().endsWith('.gba'),
+  });
+  for (const [path, bytes] of Object.entries(entries)) {
+    // Strip leading directory components from the in-zip path.
+    const filename = path.split('/').pop() || path;
+    out.push({ filename, bytes });
+  }
+  return out;
+}
 
 interface Props {
   open: boolean;
@@ -18,22 +37,40 @@ export function RomLibrary({ open, currentId, onClose, onSelect, onAppend }: Pro
 
   useEffect(() => { if (open) refresh(); }, [open]);
 
+  // Normalize incoming files: ZIPs get extracted to their constituent
+  // .gba members, raw .gba files pass through, anything else is rejected.
   const handleFiles = async (files: FileList | File[]) => {
     setBusy(true);
     try {
       const arr = Array.from(files);
+      const queue: Array<{ filename: string; bytes: Uint8Array }> = [];
       for (const file of arr) {
-        if (!file.name.toLowerCase().endsWith('.gba')) {
-          onAppend(`skipped ${file.name} (not a .gba file)`);
-          continue;
+        const lower = file.name.toLowerCase();
+        const raw = new Uint8Array(await file.arrayBuffer());
+        if (lower.endsWith('.zip')) {
+          try {
+            const extracted = extractGbaFromZip(raw);
+            if (extracted.length === 0) {
+              onAppend(`${file.name}: no .gba files inside`);
+              continue;
+            }
+            queue.push(...extracted);
+          } catch (e) {
+            onAppend(`${file.name}: zip extraction failed (${(e as Error).message})`);
+          }
+        } else if (lower.endsWith('.gba')) {
+          queue.push({ filename: file.name, bytes: raw });
+        } else {
+          onAppend(`skipped ${file.name} (need .gba or .zip)`);
         }
-        const bytes = new Uint8Array(await file.arrayBuffer());
+      }
+      for (const { filename, bytes } of queue) {
         if (bytes.length < 0xC0) {
-          onAppend(`skipped ${file.name} (too small to be a GBA ROM)`);
+          onAppend(`skipped ${filename} (too small to be a GBA ROM)`);
           continue;
         }
-        const meta = await addRom(file.name, bytes);
-        onAppend(`imported ${meta.title || meta.code} (${(bytes.length / (1024*1024)).toFixed(1)} MB)`);
+        const meta = await addRom(filename, bytes);
+        onAppend(`imported ${meta.title || meta.code} (${(bytes.length / (1024 * 1024)).toFixed(1)} MB)`);
       }
       await refresh();
     } catch (e) {
@@ -78,14 +115,14 @@ export function RomLibrary({ open, currentId, onClose, onSelect, onAppend }: Pro
         >
           <input
             type="file"
-            accept=".gba"
+            accept=".gba,.zip"
             multiple
             className="hidden"
             disabled={busy}
             onChange={(e) => { if (e.target.files) { handleFiles(e.target.files); e.target.value = ''; } }}
           />
           <div className="text-xs opacity-80">
-            {busy ? 'Importing…' : 'Drop a .gba ROM here, or click to pick one'}
+            {busy ? 'Importing…' : 'Drop a .gba or .zip ROM here, or click to pick one'}
           </div>
           <div className="text-[10px] opacity-50 mt-1">
             Stored locally in your browser via IndexedDB — never uploaded anywhere
