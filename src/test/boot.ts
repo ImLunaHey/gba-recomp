@@ -177,6 +177,9 @@ console.log(`State byte @ 0x03003528 = 0x${emu.bus.iwram[0x3528].toString(16)}`)
 console.log(`Init byte @ 0x03003F3C = 0x${emu.bus.iwram[0x3F3C].toString(16)}`);
 console.log(`Init byte @ 0x03003F84 = 0x${emu.bus.iwram[0x3F84].toString(16)}`);
 console.log(`Init byte @ 0x03003F64 = 0x${emu.bus.iwram[0x3F64].toString(16)}`);
+console.log(`BootInit state @ 0x03003FB1 = 0x${emu.bus.iwram[0x3FB1].toString(16)}`);
+console.log(`E14 state @ 0x03005E14 = 0x${emu.bus.iwram[0x5E14].toString(16)}`);
+console.log(`E17 @ 0x03005E17 = 0x${emu.bus.iwram[0x5E17].toString(16)}`);
 console.log(`Bytes 0x03003520..0x03003540: ${Array.from(emu.bus.iwram.slice(0x3520, 0x3540)).map(b => b.toString(16).padStart(2,'0')).join(' ')}`);
 // Dump gMain struct at IWRAM 0x30F0..0x3120
 console.log(`gMain @ 0x030030F0..0x03003130:`);

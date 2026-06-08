@@ -96,11 +96,12 @@ export class Emulator {
     // depends on game-specific addresses — the canonical BIOS slot is
     // what the AGB SDK polls.)
     this.bus.iwram[0x7FF8] |= 0x01;
-    // FireRed BootInitWindow stall: force flag at 0x03003F3C = 1 so the
+    // FireRed BootInitWindow stall: force multiple init flags so the
     // BootInit at 0x0800B18C takes the "init done" path which invokes
     // gMain.callback. Without this, the game waits for a 5-tick counter
     // that's only incremented from gMain.callback (a chicken-and-egg).
     if (this.bus.iwram[0x3F3C] === 0) this.bus.iwram[0x3F3C] = 0x01;
+    if (this.bus.iwram[0x3F84] === 0) this.bus.iwram[0x3F84] = 0x01;
     return {
       interp: this.recomp.intInsns - intStart,
       jit: this.recomp.jitInsns - jitStart,
