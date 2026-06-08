@@ -21,28 +21,98 @@ if (!romPath) {
 const rom = new Uint8Array(readFileSync(romPath));
 const emu = new Emulator();
 emu.loadRom(rom);
+if (process.env.JIT) emu.recomp.enabled = true;
 
 // Trace timer-control writes to see if the game uses hardware timers
 // for game-state pacing (which would run too fast/slow if our cycle
 // counting is off relative to runFrame).
+// Snapshot FIFO_A occupancy at every 100k cycles. Builds a histogram.
+if (process.env.FIFO_HIST) {
+  const hist = new Array(34).fill(0);
+  const origStep = emu.cpu.step.bind(emu.cpu);
+  let sinceSnap = 0;
+  emu.cpu.step = () => {
+    const r = origStep();
+    sinceSnap++;
+    if (sinceSnap >= 100) {
+      sinceSnap = 0;
+      hist[Math.min(33, emu.sound.countA)]++;
+    }
+    return r;
+  };
+  process.on('exit', () => {
+    console.log('FIFO_A occupancy histogram (sampled every 100 insns):');
+    const total = hist.reduce((a, b) => a + b, 0) || 1;
+    for (let i = 0; i < hist.length; i++) {
+      if (hist[i] > 0) {
+        const pct = (hist[i] * 100 / total).toFixed(1);
+        console.log(`  count=${i.toString().padStart(2)}: ${hist[i]} (${pct}%)`);
+      }
+    }
+  });
+}
+
+// Trace push spacing in CPU cycles.
+if (process.env.PUSH_SPACING) {
+  const origPush = emu.sound.pushA.bind(emu.sound);
+  let lastCyc = 0;
+  let pushes = 0;
+  let burst = 0;
+  let maxBurst = 0;
+  const hist = new Map<number, number>();
+  emu.sound.pushA = (b: number) => {
+    const c = emu.cpu.cycles;
+    const dt = c - lastCyc;
+    if (dt < 4) burst++; else { if (burst > maxBurst) maxBurst = burst; burst = 1; }
+    lastCyc = c;
+    pushes++;
+    // Histogram buckets: 0, 1-15, 16-127, 128-1023, 1024+
+    let bucket = 0;
+    if (dt >= 1024) bucket = 1024;
+    else if (dt >= 128) bucket = 128;
+    else if (dt >= 16) bucket = 16;
+    else if (dt >= 1) bucket = 1;
+    hist.set(bucket, (hist.get(bucket) ?? 0) + 1);
+    origPush(b);
+  };
+  process.on('exit', () => {
+    console.log(`pushA: total=${pushes}  maxBurst(≤4 cyc)=${maxBurst}`);
+    for (const [b, n] of Array.from(hist.entries()).sort((a,b)=>a[0]-b[0])) {
+      console.log(`  Δcycles bucket ≥${b}: ${n}`);
+    }
+  });
+}
+
+// Count Timer 0 overflows directly.
+if (process.env.COUNT_OVERFLOW) {
+  const orig = (emu.timers as any).overflow.bind(emu.timers);
+  const counts = [0, 0, 0, 0];
+  (emu.timers as any).overflow = (i: number) => {
+    counts[i]++;
+    orig(i);
+  };
+  process.on('exit', () => {
+    console.log(`Timer overflows: T0=${counts[0]} T1=${counts[1]} T2=${counts[2]} T3=${counts[3]}`);
+    // Approximate expected: total CPU cycles / cyclesPerOverflow.
+    const totalCycles = emu.cpu.cycles;
+    console.log(`CPU cycles: ${totalCycles}  T0 expected ~ ${(totalCycles/760).toFixed(0)} (760 cyc/overflow at reload=0xFD08, prescale=1)`);
+  });
+}
+
 if (process.env.TRACE_TIMERS) {
   const origW = emu.io.write16.bind(emu.io);
-  const seen = new Map<number, number>();
+  const totalByOff = new Map<number, number>();
   emu.io.write16 = (addr: number, v: number) => {
     const off = addr & 0x3FF;
-    // TM0CNT_L..TM3CNT_H at 0x100..0x10F
-    if (off >= 0x100 && off <= 0x10F) {
-      const key = (off << 16) | v;
-      seen.set(key, (seen.get(key) ?? 0) + 1);
+    if ((off >= 0x100 && off <= 0x10F) || (off >= 0x080 && off <= 0x0AF)) {
+      totalByOff.set(off, (totalByOff.get(off) ?? 0) + 1);
     }
     origW(addr, v);
   };
   process.on('exit', () => {
-    console.log('Timer writes:');
-    for (const [key, n] of Array.from(seen.entries()).sort((a,b)=>b[1]-a[1]).slice(0, 16)) {
-      const off = key >>> 16;
-      const v = key & 0xFFFF;
-      console.log(`  0x040000${off.toString(16).padStart(2,'0')} <- 0x${v.toString(16).padStart(4,'0')}  x${n}`);
+    console.log('Sound/Timer write counts (per address):');
+    for (const [off, n] of Array.from(totalByOff.entries()).sort((a,b)=>b[1]-a[1])) {
+      console.log(`  0x040000${off.toString(16).padStart(2,'0')}  x${n}`);
     }
   });
 }
@@ -87,6 +157,9 @@ const pressAOnceAt = process.env.PRESS_A_ONCE_AT ? parseInt(process.env.PRESS_A_
 const start = performance.now();
 let pcSeen = new Set<number>();
 let lastPc = 0;
+// Drain sound output per frame (browser does this) so we can audit
+// the actual production rate without the output buffer capping.
+let totalSamplesProduced = 0;
 // Optional: dump a snapshot every N frames.
 const dumpEvery = process.env.DUMP_EVERY ? parseInt(process.env.DUMP_EVERY, 10) : 0;
 for (let i = 0; i < frames; i++) {
@@ -102,6 +175,11 @@ for (let i = 0; i < frames; i++) {
     console.error(`FAIL at frame ${i}:`, (e as Error).message);
     break;
   }
+  // Match browser behavior: drain sound output after each frame so the
+  // 2048-sample cap doesn't masquerade as a real rate measurement.
+  if (i === 0) (globalThis as any).__cycStart = emu.cpu.cycles;
+  totalSamplesProduced += emu.sound.outputLen;
+  emu.sound.outputLen = 0;
   pcSeen.add(emu.cpu.state.r[15] & ~3);
   lastPc = emu.cpu.state.r[15];
   if (dumpEvery && i > 0 && i % dumpEvery === 0) {
@@ -116,6 +194,31 @@ console.log(`DISPCNT=0x${emu.ppu.dispcnt.toString(16)}  mode=${emu.ppu.dispcnt &
 
 writePpm(outPath);
 dumpPpu('final');
+dumpSound();
+if (process.env.AUDIO_AUDIT) {
+  // Actual cycles per frame (emu's internal cycle counter advance).
+  const cycStart = (globalThis as any).__cycStart ?? 0;
+  const totalCycles = emu.cpu.cycles - cycStart;
+  const cyclesPerFrame = totalCycles / frames;
+  console.log(`  cycles per frame (actual) = ${cyclesPerFrame.toFixed(2)} (nominal 280896)`);
+  // Verify the relationship between samples-produced-per-frame and the
+  // reported sourceRate. If the sourceRate Web Audio plays them at
+  // differs from the emulator's actual production rate, audio and
+  // video drift apart over time.
+  const samplesPerFrame = totalSamplesProduced / frames;
+  const framesPerSec = 59.7275;
+  const producedPerSec = samplesPerFrame * framesPerSec;
+  const playRate = emu.sound.sampleRate;
+  const drift = (producedPerSec - playRate) / playRate;
+  console.log(`AUDIO AUDIT:`);
+  console.log(`  frames run            = ${frames}`);
+  console.log(`  samples produced total= ${totalSamplesProduced}`);
+  console.log(`  samples per frame avg = ${samplesPerFrame.toFixed(2)}`);
+  console.log(`  produced rate (Hz)    = ${producedPerSec.toFixed(2)}`);
+  console.log(`  playback rate (Hz)    = ${playRate.toFixed(2)}`);
+  console.log(`  drift (%/sec)         = ${(drift * 100).toFixed(4)}%`);
+  console.log(`  drift over 219s video = ${(drift * 219).toFixed(3)} s`);
+}
 if (process.env.DUMP_LAYERS) dumpLayers();
 if (process.env.DUMP_OAM_AT) dumpOam();
 
@@ -185,6 +288,11 @@ function writePpm(path: string) {
     colors.add((f[i*4]<<16) | (f[i*4+1]<<8) | f[i*4+2]);
   }
   console.log(`  wrote ${path}  (${colors.size} colors)`);
+}
+
+function dumpSound() {
+  const s = emu.sound;
+  console.log(`SOUNDCNT_X=0x${s.soundcntX.toString(16)} (enable=${(s.soundcntX&0x80)?1:0}) SOUNDCNT_H=0x${s.soundcntH.toString(16)} A.timer=${(s.soundcntH>>10)&1} B.timer=${(s.soundcntH>>14)&1} sampleRate=${s.sampleRate.toFixed(1)} drained=${s.outputLen} fifoA.count=${s.countA} fifoB.count=${s.countB}`);
 }
 
 function dumpPpu(label: string) {
