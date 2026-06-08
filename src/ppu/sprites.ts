@@ -59,7 +59,12 @@ export function renderSprites(ppu: Ppu, y: number): void {
 
     const semi = mode === 1;
     const objWindow = mode === 2;
-    const layerHi = (4 << 16) | (priority << 18) | (semi ? (1 << 20) : 0) | (objWindow ? (1 << 21) : 0);
+    // No layer bits — OBJ pixels are identified by being in objLine.
+    // The OLD code had `4 << 16` here, but layer field is only 2 bits
+    // (16-17), so the high bit of 4 spilled into bit 18 (priority's LSB)
+    // and corrupted every sprite priority value: prio 0→1, prio 2→3, etc.
+    // That manifested as sprites layering wrong vs BGs and other sprites.
+    const layerHi = (priority << 18) | (semi ? (1 << 20) : 0) | (objWindow ? (1 << 21) : 0);
 
     const tileBase = 0x10000;
     const tilesPerTile = color8 ? 2 : 1;
