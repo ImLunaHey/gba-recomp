@@ -61,7 +61,31 @@ export class BiosHle {
     if (mask & 0x04) this.bus.pram.fill(0);
     if (mask & 0x08) this.bus.vram.fill(0);
     if (mask & 0x10) this.bus.oam.fill(0);
-    // 0x20 sio, 0x40 sound, 0x80 other IO — we ignore in HLE.
+    // 0x20 sio, 0x40 sound — ignored in HLE.
+    if (mask & 0x80) {
+      // "Other IO" reset. The real GBA BIOS clears DISPCNT/etc to 0,
+      // but it also writes 0x0100 to BG2_PA, BG2_PD, BG3_PA, BG3_PD —
+      // the identity matrix. Games (notably Pokemon FireRed's Oak
+      // intro) rely on this default: they enable BG2 affine and never
+      // touch PA/PD, expecting identity sampling.
+      const ppu = (this.cpu.bus.io as any)?.ppu;
+      if (ppu) {
+        ppu.bgPA[0] = 0x100; ppu.bgPD[0] = 0x100;  // BG2 identity
+        ppu.bgPA[1] = 0x100; ppu.bgPD[1] = 0x100;  // BG3 identity
+        ppu.bgPB[0] = 0; ppu.bgPC[0] = 0;
+        ppu.bgPB[1] = 0; ppu.bgPC[1] = 0;
+      }
+    }
+  }
+
+  // Public hook so emulator.loadRom() can run the same defaults at boot
+  // even if the game never explicitly invokes RegisterRamReset(0x80).
+  resetAffineDefaults(): void {
+    const ppu = (this.cpu.bus.io as any)?.ppu;
+    if (ppu) {
+      ppu.bgPA[0] = 0x100; ppu.bgPD[0] = 0x100;
+      ppu.bgPA[1] = 0x100; ppu.bgPD[1] = 0x100;
+    }
   }
 
   // -------- Interrupt waits --------

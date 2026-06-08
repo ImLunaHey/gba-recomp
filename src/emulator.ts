@@ -52,6 +52,10 @@ export class Emulator {
     // have already touched — enable VBlank/HBlank/VCount IRQ defaults so
     // games that don't explicitly write DISPSTAT can still receive IRQs.
     this.ppu.dispstat = 0x38;
+    // Apply the BIOS's affine-register defaults (PA=PD=0x100, PB=PC=0).
+    // Pokemon FireRed's Oak intro and other Mode 1/2 scenes enable BG2
+    // affine and never write PA/PD, expecting identity sampling.
+    this.bios.resetAffineDefaults();
   }
 
   // Run a full GBA frame worth of cycles (~280896). Returns insn counts
