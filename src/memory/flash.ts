@@ -70,9 +70,19 @@ export class Flash128K implements SaveBridge {
         return;
 
       case FlashCmd.EraseSector:
+        // 0x30 → erase that 4 KB sector. The address's low 12 bits must
+        // be zero (sector-aligned); only the bank + sector-index portion
+        // matters.
         if ((addr & 0xFFF) === 0 && v === 0x30) {
           const base = (this.bank << 16) | (addr & 0xF000);
           this.data.fill(0xFF, base, base + 0x1000);
+          this.state = FlashCmd.Normal;
+          if (this.onChange) this.onChange();
+          return;
+        }
+        // 0x10 → 0x5555 → erase entire chip.
+        if (addr === 0x5555 && v === 0x10) {
+          this.data.fill(0xFF);
           this.state = FlashCmd.Normal;
           if (this.onChange) this.onChange();
           return;
@@ -81,7 +91,31 @@ export class Flash128K implements SaveBridge {
         return;
     }
 
-    // Command sequencing on 0x5555 / 0x2AAA.
+    // The erase command sequence requires a SECOND unlock pair after
+    // 0x80 (= AA→5555, 55→2AAA, 80→5555, then AA→5555, 55→2AAA, then
+    // either 0x30→sectoraddr or 0x10→5555). We MUST match the
+    // EraseAwait* states BEFORE the generic AwaitFirst/AwaitSecond
+    // patterns, otherwise the second AA→5555 short-circuits back to
+    // the start of an unlock sequence and the erase never completes —
+    // which is the symptom Pokemon Ruby reported ("saving... don't
+    // turn off" stuck forever).
+    if (this.state === FlashCmd.EraseAwaitFirst && addr === 0x5555 && v === 0xAA) {
+      this.state = FlashCmd.EraseAwaitSecond; return;
+    }
+    if (this.state === FlashCmd.EraseAwaitSecond && addr === 0x2AAA && v === 0x55) {
+      this.state = FlashCmd.EraseSector; return;
+    }
+    // After EraseSector unlock, the chip accepts either:
+    //   0x30 → sectorAddr → erase that 4 KB sector (handled in the
+    //     switch at the top of write() under FlashCmd.EraseSector)
+    //   0x10 → 0x5555 → erase the whole chip
+    if (this.state === FlashCmd.EraseSector && addr === 0x5555 && v === 0x10) {
+      this.data.fill(0xFF);
+      this.state = FlashCmd.Normal;
+      if (this.onChange) this.onChange();
+      return;
+    }
+    // Generic unlock cycle 1.
     if (addr === 0x5555 && v === 0xAA) {
       this.state = FlashCmd.AwaitFirst;
       return;
@@ -97,18 +131,7 @@ export class Flash128K implements SaveBridge {
         case 0x80: this.state = FlashCmd.EraseAwaitFirst; return;
         case 0xA0: this.state = FlashCmd.Program; return;
         case 0xB0: this.state = FlashCmd.BankSelect; return;
-        case 0x10:
-          this.data.fill(0xFF);
-          this.state = FlashCmd.Normal;
-          if (this.onChange) this.onChange();
-          return;
       }
-    }
-    if (this.state === FlashCmd.EraseAwaitFirst && addr === 0x5555 && v === 0xAA) {
-      this.state = FlashCmd.EraseAwaitSecond; return;
-    }
-    if (this.state === FlashCmd.EraseAwaitSecond && addr === 0x2AAA && v === 0x55) {
-      this.state = FlashCmd.EraseSector; return;
     }
     this.state = FlashCmd.Normal;
   }
