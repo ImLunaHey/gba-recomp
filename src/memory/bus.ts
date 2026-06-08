@@ -68,18 +68,14 @@ export class Bus {
   }
 
   loadRom(bytes: Uint8Array) {
-    // Pad up to 32 MB nominally; here we keep actual size.
-    this.rom = bytes;
-    // 16/32-bit views need 2/4-byte alignment.
-    const pad16 = bytes.length & 1 ? bytes.length + 1 : bytes.length;
+    // Always copy into a plain ArrayBuffer so all views share alignment + type.
     const pad32 = (bytes.length + 3) & ~3;
-    if (pad16 !== bytes.length || pad32 !== bytes.length) {
-      const padded = new Uint8Array(pad32);
-      padded.set(bytes);
-      this.rom = padded;
-    }
-    this.rom16 = new Uint16Array(this.rom.buffer);
-    this.rom32 = new Uint32Array(this.rom.buffer);
+    const ab = new ArrayBuffer(pad32);
+    const copy = new Uint8Array(ab);
+    copy.set(bytes);
+    this.rom = copy;
+    this.rom16 = new Uint16Array(ab);
+    this.rom32 = new Uint32Array(ab);
   }
 
   attachIo(io: IoBridge) { this.io = io; }

@@ -165,7 +165,10 @@ export class Recompiler {
 
     let mod: WebAssembly.Module;
     try {
-      mod = new WebAssembly.Module(wasmBytes);
+      // Force a plain ArrayBuffer-backed view to satisfy strict TS BufferSource.
+      const buf = new Uint8Array(new ArrayBuffer(wasmBytes.length));
+      buf.set(wasmBytes);
+      mod = new WebAssembly.Module(buf);
     } catch {
       return null;
     }
