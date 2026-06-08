@@ -5,6 +5,7 @@ interface PadSnapshot {
   id: string;
   mapping: string;
   buttons: boolean[];
+  buttonValues: number[];
   axes: number[];
 }
 
@@ -34,10 +35,12 @@ export function ControllerPanel({ open, onClose, onChange }: Props) {
       for (const p of pads) { if (p && p.connected) { pad = p; break; } }
       if (!pad) { setSnap(null); return; }
       const pressed = pad.buttons.map((b) => b.pressed);
+      const values  = pad.buttons.map((b) => b.value);
       setSnap({
         id: pad.id,
         mapping: pad.mapping || 'sony',
         buttons: pressed,
+        buttonValues: values,
         axes: Array.from(pad.axes),
       });
       // If we're in remap mode, look for any newly-pressed button to bind.
@@ -136,6 +139,7 @@ export function ControllerPanel({ open, onClose, onChange }: Props) {
               onEdit={setEditingKey}
               onReset={onReset}
             />
+            <RawSignals snap={snap} />
           </>
         )}
       </div>
@@ -276,6 +280,70 @@ function Stick({ x, y, pressed }: { x: number; y: number; pressed: boolean }) {
         style={{ transform: `translate(${x}px, ${y}px)` }}
       />
     </div>
+  );
+}
+
+// Raw button + axis dump. The diagram + binding table assume a
+// recognizable layout, but if your controller routes D-pad / shoulders
+// through unusual indices, the only way to find them is to press
+// physically and see which row down here flashes. Press your D-pad
+// while watching this section and tell me which index moves.
+function RawSignals({ snap }: { snap: PadSnapshot }) {
+  const buttons = snap.buttons;
+  const values = snap.buttonValues;
+  const axes = snap.axes;
+  return (
+    <details className="mt-4" open>
+      <summary className="text-[10px] uppercase tracking-widest opacity-50 cursor-pointer select-none">
+        Raw signals
+      </summary>
+      <div className="mt-2 grid grid-cols-2 gap-3">
+        <div>
+          <div className="text-[10px] opacity-50 mb-1">Buttons ({buttons.length})</div>
+          <div className="grid grid-cols-6 gap-1">
+            {buttons.map((b, i) => (
+              <div
+                key={i}
+                className={`text-center text-[10px] py-1 rounded border ${
+                  b ? 'bg-[#4a8aff] border-[#6ea2ff] text-white' : 'bg-[#1c1c22] border-[#2a2a30]'
+                }`}
+                title={values[i] > 0 ? `value=${values[i].toFixed(2)}` : undefined}
+              >
+                <div className="font-bold">{i}</div>
+                {values[i] > 0 && values[i] < 1 ? (
+                  <div className="text-[8px] opacity-70">{values[i].toFixed(2)}</div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] opacity-50 mb-1">Axes ({axes.length})</div>
+          <div className="flex flex-col gap-1">
+            {axes.map((v, i) => {
+              const active = Math.abs(v) > 0.05;
+              return (
+                <div key={i} className="grid grid-cols-[24px_1fr_40px] gap-2 items-center text-[10px]">
+                  <div className={`text-right ${active ? 'text-[#9be7ff]' : 'opacity-50'}`}>{i}</div>
+                  <div className="relative h-2 bg-[#1c1c22] border border-[#2a2a30] rounded-sm overflow-hidden">
+                    <div className="absolute left-1/2 top-0 bottom-0 w-px bg-[#2a2a30]" />
+                    <div
+                      className="absolute top-0 bottom-0 min-w-px"
+                      style={{
+                        left: v < 0 ? `${50 + v * 50}%` : '50%',
+                        width: `${Math.abs(v) * 50}%`,
+                        background: v < 0 ? '#5ba8ff' : '#ff7858',
+                      }}
+                    />
+                  </div>
+                  <div className={`font-mono ${active ? 'text-white' : 'opacity-50'}`}>{v.toFixed(2)}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </details>
   );
 }
 
