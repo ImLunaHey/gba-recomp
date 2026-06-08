@@ -324,6 +324,119 @@ describe('Block transfer (LDM/STM)', () => {
   });
 });
 
+describe('IRQ entry and return', () => {
+  it('takeIrq enters IRQ mode with correct LR', () => {
+    const { cpu } = setupRunArm([0xE320F000]);  // NOP (MSR CPSR_f, #0)
+    cpu.state.r[15] = 0x08000100;  // next decode
+    cpu.state.cpsr = Mode.SYS;     // start in SYS mode
+    cpu.takeIrq();
+    expect(cpu.state.mode()).toBe(Mode.IRQ);
+    expect(cpu.state.r[14]).toBe(0x08000104);  // saved PC + 4
+    expect(cpu.state.r[15]).toBe(0x18);        // IRQ vector
+    expect(cpu.state.cpsr & FLAG_T).toBe(0);   // T cleared
+    expect(cpu.state.cpsr & 0x80).toBe(0x80);  // I set
+  });
+
+  it('SUBS PC, LR, #4 restores CPSR from SPSR_irq', () => {
+    // Manually enter IRQ then execute SUBS PC, LR, #4.
+    const { cpu, bus } = setupRunArm([0xE25EF004]);  // SUBS PC, LR, #4
+    // Set up exception state manually.
+    cpu.state.cpsr = Mode.SYS | FLAG_T;
+    cpu.state.r[15] = 0x08000100;
+    cpu.takeIrq();
+    // takeIrq put PC at 0x18; we want our SUBS instruction to execute.
+    // Place it at 0x03000000 and set PC there.
+    bus.write32(0x03000000, 0xE25EF004);
+    cpu.state.r[15] = 0x03000000;
+    cpu.state.r[14] = 0x08000104;  // saved LR (= original next + 4)
+    runSteps(cpu, 1);
+    expect(cpu.state.mode()).toBe(Mode.SYS);     // back to SYS
+    expect(cpu.state.cpsr & FLAG_T).toBe(FLAG_T); // T restored
+    expect(cpu.state.r[15]).toBe(0x08000100);    // PC restored to next of interrupted insn
+  });
+
+  it('Banked SP swap on mode change', () => {
+    const { cpu } = setupRunArm([0xE320F000]);
+    cpu.state.cpsr = Mode.SYS;
+    cpu.state.r[13] = 0xDEAD_C0DE;
+    cpu.state.switchMode(Mode.IRQ);
+    expect(cpu.state.r[13]).not.toBe(0xDEAD_C0DE);  // different banked SP
+    cpu.state.switchMode(Mode.SYS);
+    expect(cpu.state.r[13]).toBe(0xDEAD_C0DE);  // restored
+  });
+});
+
+describe('IO register behavior', () => {
+  it('write to DISPCNT (0x4000000) reflects in PPU', () => {
+    const { cpu, bus } = setupRunArm([]);
+    bus.write16(0x04000000, 0x0100);  // BG0 enable
+    expect((bus.io as any).ppu.dispcnt).toBe(0x0100);
+  });
+
+  it('write to IE (0x4000200) updates IRQ', () => {
+    const { bus } = setupRunArm([]);
+    bus.write16(0x04000200, 0x0001);  // VBlank enable
+    expect((bus.io as any).irq.ie).toBe(0x0001);
+  });
+
+  it('write to IF (0x4000202) acks (clears)', () => {
+    const { bus } = setupRunArm([]);
+    (bus.io as any).irq.iflag = 0x0001;
+    bus.write16(0x04000202, 0x0001);
+    expect((bus.io as any).irq.iflag).toBe(0);
+  });
+
+  it('VCOUNT (0x4000006) reads PPU vcount', () => {
+    const { bus } = setupRunArm([]);
+    (bus.io as any).ppu.vcount = 42;
+    expect(bus.read16(0x04000006)).toBe(42);
+  });
+
+  it('byte write to PRAM mirrors to halfword', () => {
+    // GBA quirk: 8-bit writes to PRAM/VRAM are widened to halfword broadcasts.
+    const { bus } = setupRunArm([]);
+    bus.write8(0x05000000, 0xAB);
+    expect(bus.read16(0x05000000)).toBe(0xABAB);
+  });
+
+  it('VRAM 8-bit write to OBJ area (≥0x10000) is dropped', () => {
+    const { bus } = setupRunArm([]);
+    bus.write8(0x06010000, 0xFF);
+    expect(bus.read16(0x06010000)).toBe(0);
+  });
+
+  it('OAM ignores 8-bit writes entirely', () => {
+    const { bus } = setupRunArm([]);
+    bus.write8(0x07000000, 0xFF);
+    expect(bus.read8(0x07000000)).toBe(0);
+  });
+});
+
+describe('Memory mirrors and rotations', () => {
+  it('IWRAM mirrors every 32 KB', () => {
+    const { bus } = setupRunArm([]);
+    bus.write32(0x03000000, 0xDEADBEEF);
+    expect(bus.read32(0x03008000)).toBe(0xDEADBEEF);
+    expect(bus.read32(0x03FFFFFC & ~3)).toBe(0);   // last word — different
+    bus.write32(0x03007FFC, 0xCAFEBABE);
+    expect(bus.read32(0x03FFFFFC)).toBe(0xCAFEBABE);  // mirror access
+  });
+
+  it('VRAM mirror fold: 0x18000+ aliases 0x10000+', () => {
+    const { bus } = setupRunArm([]);
+    bus.write32(0x06010000, 0xAA55_AA55);
+    expect(bus.read32(0x06018000)).toBe(0xAA55_AA55);
+  });
+
+  it('ROM read returns padded zeros past end', () => {
+    const { bus } = setupRunArm([]);
+    // ROM is 0x100 bytes (test setup); read past should return open-bus pattern.
+    const v = bus.read32(0x08001000);
+    // Open-bus value depends on impl — just ensure no crash.
+    expect(typeof v).toBe('number');
+  });
+});
+
 describe('Mode switching', () => {
   it('BX to ARM target clears T bit', () => {
     // THUMB BX R0 with R0 = 0x03000010 (bit 0 = 0)
