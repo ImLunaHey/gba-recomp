@@ -5,6 +5,8 @@ import { Screen } from './Screen';
 import { Gamepad } from './Gamepad';
 import { LogPane } from './LogPane';
 import { useGamepad } from './useGamepad';
+import { useKeypadHighlight } from './useKeypadHighlight';
+import { ControllerPanel } from './ControllerPanel';
 
 const ROMS = [
   { value: '/firered.gba',  label: 'Pokemon FireRed' },
@@ -56,6 +58,9 @@ export function App() {
     onConnected: (name) => append(`controller connected: ${name}`),
     onDisconnected: (name) => append(`controller disconnected: ${name}`),
   });
+  useKeypadHighlight(emu.keypad);
+
+  const [showCp, setShowCp] = useState(false);
 
   // RTC GPIO interposer is now installed inside Emulator.constructor()
   // so it's always active (was previously here in useMemo, which meant
@@ -186,10 +191,12 @@ export function App() {
           <input type="file" accept=".sav,.bin" onChange={onUploadSave} style={{ display: 'none' }} />
         </label>
         <button onClick={onClearSave}>Clear Save</button>
+        <button onClick={() => setShowCp(true)}>Controller…</button>
       </div>
       <div className="row">
         <span style={{ opacity: 0.5 }}>keys: arrows · z/x · a/s · enter/shift · saves auto-persist to browser storage</span>
       </div>
+      <ControllerPanel open={showCp} onClose={() => setShowCp(false)} />
       <LogPane lines={log} />
     </>
   );

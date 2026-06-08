@@ -2,7 +2,10 @@
 //  A  B  Sel Sta R  L  U  D  Rs Ls
 // bit0 1  2   3  4  5  6  7  8  9
 
-export const enum Key {
+// NOT `const enum` so we can do reverse name lookups (`Key[k]`) — the
+// gamepad/UI code uses string names ("A", "UP") for accessibility
+// labels and remapping.
+export enum Key {
   A = 0, B = 1, SELECT = 2, START = 3,
   RIGHT = 4, LEFT = 5, UP = 6, DOWN = 7,
   R = 8, L = 9,

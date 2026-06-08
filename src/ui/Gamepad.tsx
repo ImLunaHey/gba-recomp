@@ -16,19 +16,21 @@ function HoldButton({ keypad, k, className, children, ariaLabel }: BtnProps) {
   const press = (e: ReactPointerEvent) => {
     e.preventDefault();
     keypad.press(k);
-    ref.current?.classList.add('pressed');
     ref.current?.setPointerCapture(e.pointerId);
   };
   const release = (e: ReactPointerEvent) => {
     e.preventDefault();
     keypad.release(k);
-    ref.current?.classList.remove('pressed');
   };
+  // data-key carries the Key enum NAME ("A", "UP", etc.) so the
+  // useKeypadHighlight() loop can re-derive which button corresponds
+  // to which bit and update .pressed for any input source.
   return (
     <button
       ref={ref}
       type="button"
       className={`gp-btn ${className ?? ''}`}
+      data-key={Key[k]}
       aria-label={ariaLabel}
       onPointerDown={press}
       onPointerUp={release}

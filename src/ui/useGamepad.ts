@@ -1,15 +1,12 @@
 import { useEffect } from 'react';
 import { Key, Keypad } from '../io/keypad';
 
-// Standard Gamepad mapping (W3C) button indices. PS5 DualSense on macOS
-// via Bluetooth maps to "standard" in Chrome and most Chromium-derived
-// browsers (Edge, Brave, Arc); Safari uses a similar layout. Cross is
-// button 0 ("A" in Xbox terminology) and Circle is button 1, which we
-// route to GBA A and B respectively (matching the physical position of
-// A/B on the GBA — the rightmost button is A).
-const BUTTON_MAP: Array<[number, Key]> = [
-  [0,  Key.A],       // Cross  / Xbox A  → GBA A
-  [1,  Key.B],       // Circle / Xbox B  → GBA B
+// W3C Standard Gamepad mapping (when navigator reports
+// `pad.mapping === "standard"`) — button 0 is the BOTTOM of the right
+// cluster, which is Cross on a PS5 DualSense.
+const STANDARD_MAP: Array<[number, Key]> = [
+  [0,  Key.A],       // Cross  → GBA A
+  [1,  Key.B],       // Circle → GBA B
   [4,  Key.L],       // L1
   [5,  Key.R],       // R1
   [8,  Key.SELECT],  // Share / View
@@ -20,25 +17,44 @@ const BUTTON_MAP: Array<[number, Key]> = [
   [15, Key.RIGHT],
 ];
 
-// Some controllers (or non-standard mappings) report the D-pad via the
-// left analog stick instead. We synthesize D-pad presses from axis 0/1
-// if they cross this threshold.
+// PS5 DualSense on macOS Safari (and some Bluetooth-driver combinations
+// on Chrome) reports `mapping: ""` and puts the buttons in Sony's native
+// order: Square=0, Cross=1, Circle=2, Triangle=3. This matters because
+// Square is the LEFT button of the right cluster; if we used the
+// "standard" mapping anyway, pressing X (Cross, the natural "confirm"
+// button) would do nothing and pressing Square would fire the A action.
+const SONY_NONSTANDARD_MAP: Array<[number, Key]> = [
+  [1,  Key.A],       // Cross    → GBA A
+  [2,  Key.B],       // Circle   → GBA B
+  [6,  Key.L],       // L1
+  [7,  Key.R],       // R1
+  [8,  Key.SELECT],
+  [9,  Key.START],
+  [14, Key.UP],
+  [15, Key.DOWN],
+  [16, Key.LEFT],
+  [17, Key.RIGHT],
+];
+
 const STICK_THRESHOLD = 0.5;
 
 interface UseGamepadOptions {
   keypad: Keypad;
   onConnected?: (name: string) => void;
   onDisconnected?: (name: string) => void;
+  // Whether to also synthesize D-pad input from the left analog stick.
+  // Off by default — many controllers report D-pad twice (once via the
+  // dedicated buttons, once via the stick) and overlapping inputs feel
+  // wrong if you're holding D-pad while resting your thumb on the stick.
+  stickAsDpad?: boolean;
 }
 
-export function useGamepad({ keypad, onConnected, onDisconnected }: UseGamepadOptions) {
+export function useGamepad({ keypad, onConnected, onDisconnected, stickAsDpad = false }: UseGamepadOptions) {
   useEffect(() => {
-    // Track which keys we've pressed via the gamepad so we can release
-    // them cleanly when the button goes up (and not interfere with the
-    // touch / keyboard paths releasing the same key).
     const heldByPad = new Set<Key>();
     let raf = 0;
     let stop = false;
+    let mapping: Array<[number, Key]> = STANDARD_MAP;
 
     const press = (k: Key) => {
       if (heldByPad.has(k)) return;
@@ -59,31 +75,32 @@ export function useGamepad({ keypad, onConnected, onDisconnected }: UseGamepadOp
       for (const p of pads) { if (p && p.connected) { pad = p; break; } }
       if (!pad) return;
 
-      // Track which keys SHOULD be pressed this tick. Anything not in
-      // this set that is currently held gets released.
       const want = new Set<Key>();
-      for (const [idx, key] of BUTTON_MAP) {
+      for (const [idx, key] of mapping) {
         if (pad.buttons[idx] && pad.buttons[idx].pressed) want.add(key);
       }
-      // Left analog stick → D-pad fallback (additive — left stick AND
-      // D-pad both produce direction presses).
-      const ax = pad.axes[0] ?? 0;
-      const ay = pad.axes[1] ?? 0;
-      if (ax < -STICK_THRESHOLD) want.add(Key.LEFT);
-      if (ax >  STICK_THRESHOLD) want.add(Key.RIGHT);
-      if (ay < -STICK_THRESHOLD) want.add(Key.UP);
-      if (ay >  STICK_THRESHOLD) want.add(Key.DOWN);
+      if (stickAsDpad) {
+        const ax = pad.axes[0] ?? 0;
+        const ay = pad.axes[1] ?? 0;
+        if (ax < -STICK_THRESHOLD) want.add(Key.LEFT);
+        if (ax >  STICK_THRESHOLD) want.add(Key.RIGHT);
+        if (ay < -STICK_THRESHOLD) want.add(Key.UP);
+        if (ay >  STICK_THRESHOLD) want.add(Key.DOWN);
+      }
 
-      // Apply diff.
       for (const k of want) press(k);
       for (const k of heldByPad) if (!want.has(k)) release(k);
     };
     raf = requestAnimationFrame(tick);
 
-    const onConn = (e: GamepadEvent) => onConnected?.(e.gamepad.id);
+    const onConn = (e: GamepadEvent) => {
+      // Pick the layout based on what the browser reports. "standard"
+      // is the W3C order (Cross = 0); anything else, assume Sony's
+      // native order (Square = 0, Cross = 1).
+      mapping = e.gamepad.mapping === 'standard' ? STANDARD_MAP : SONY_NONSTANDARD_MAP;
+      onConnected?.(`${e.gamepad.id} [${e.gamepad.mapping || 'non-standard'}]`);
+    };
     const onDisc = (e: GamepadEvent) => {
-      // Release anything held when a controller drops out — otherwise
-      // an in-game direction can get "stuck."
       for (const k of heldByPad) keypad.release(k);
       heldByPad.clear();
       onDisconnected?.(e.gamepad.id);
