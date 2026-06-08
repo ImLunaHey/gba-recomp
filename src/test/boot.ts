@@ -1,0 +1,91 @@
+// Headless boot smoke test — load the ROM from disk and run for a few
+// frames, printing CPU state so we can see if it makes forward progress.
+import { readFileSync } from 'node:fs';
+import { Emulator } from '../emulator';
+
+const path = process.argv[2] ?? 'public/firered.gba';
+const rom = new Uint8Array(readFileSync(path));
+const emu = new Emulator();
+emu.loadRom(rom);
+
+// Trace PPU IO + DISPCNT/DISPSTAT writes.
+const ppu = emu.ppu;
+const origWriteReg = ppu.writeReg.bind(ppu);
+ppu.writeReg = (a: number, v: number) => {
+  if (a === 0x00 || a === 0x04) console.log(`  PPU[${a.toString(16).padStart(2,'0')}] <- 0x${v.toString(16).padStart(4,'0')}  pc=0x${emu.cpu.state.r[15].toString(16)}`);
+  origWriteReg(a, v);
+};
+// Track vcount reads + IRQ raises.
+let vcountReads = 0;
+let lastVcountRead = -1;
+const origIoRead16 = emu.io.read16.bind(emu.io);
+emu.io.read16 = (addr: number) => {
+  const v = origIoRead16(addr);
+  if ((addr & 0x3FF) === 0x006) { vcountReads++; lastVcountRead = v; }
+  return v;
+};
+let irqRaises = 0;
+const origRaise = emu.irq.raise.bind(emu.irq);
+emu.irq.raise = (bits: number) => { irqRaises++; origRaise(bits); };
+let irqEntries = 0;
+const origTakeIrq = emu.cpu.takeIrq.bind(emu.cpu);
+emu.cpu.takeIrq = () => { irqEntries++; origTakeIrq(); };
+const swiCounts = new Map<number, number>();
+const origSwi = emu.cpu.softwareInterrupt.bind(emu.cpu);
+emu.cpu.softwareInterrupt = (n: number) => {
+  swiCounts.set(n, (swiCounts.get(n) || 0) + 1);
+  origSwi(n);
+};
+
+console.log('Header title:', new TextDecoder('ascii').decode(rom.subarray(0xA0, 0xAC)).replace(/\0/g, ''));
+console.log('Game code  :', new TextDecoder('ascii').decode(rom.subarray(0xAC, 0xB0)));
+console.log('Maker code :', new TextDecoder('ascii').decode(rom.subarray(0xB0, 0xB2)));
+
+const frames = parseInt(process.argv[3] ?? '60', 10);
+console.log(`Running ${frames} frames…`);
+
+let lastPc = 0;
+const start = performance.now();
+for (let i = 0; i < frames; i++) {
+  try {
+    const r = emu.runFrame();
+    if (i < 5 || i === frames - 1) {
+      const s = emu.cpu.state;
+      console.log(
+        `frame ${i.toString().padStart(3)}  pc=${s.r[15].toString(16).padStart(8, '0')}  mode=${s.mode().toString(16)}  thumb=${(s.cpsr & 0x20) ? 1 : 0}  sp=${s.r[13].toString(16).padStart(8, '0')}  halted=${s.halted}  cpsr=${s.cpsr.toString(16)}  interp=${r.interp}  jit=${r.jit}`
+      );
+    }
+    lastPc = emu.cpu.state.r[15];
+  } catch (e) {
+    console.error(`FAILED at frame ${i}:`, (e as Error).stack);
+    process.exit(1);
+  }
+}
+const dt = performance.now() - start;
+console.log(`OK — ${frames} frames in ${dt.toFixed(0)}ms  (last pc=${lastPc.toString(16)})`);
+console.log(`vcountReads=${vcountReads}  lastValue=${lastVcountRead}  irqRaises=${irqRaises}  irqEntries=${irqEntries}`);
+
+// Step trace — run 200 more instructions one by one logging PC + R2.
+console.log('\nstep trace at end of last frame:');
+for (let i = 0; i < 200; i++) {
+  const s = emu.cpu.state;
+  console.log(`  ${i.toString().padStart(3)}  pc=${s.r[15].toString(16).padStart(8,'0')}  r0=${s.r[0].toString(16)}  r1=${s.r[1].toString(16)}  r2=${s.r[2].toString(16)}  r3=${s.r[3].toString(16)}  cpsr=${(s.cpsr>>>0).toString(16)}`);
+  emu.cpu.step();
+}
+
+// User IRQ handler pointer at 0x03007FFC (game writes its handler here).
+const iwramAt = (off: number) =>
+  emu.bus.iwram[off] | (emu.bus.iwram[off+1]<<8) | (emu.bus.iwram[off+2]<<16) | (emu.bus.iwram[off+3]<<24);
+console.log(`User IRQ vector @ IWRAM[0x7FFC] = ${(iwramAt(0x7FFC) >>> 0).toString(16)}`);
+console.log(`IntrCheck       @ IWRAM[0x7FF8] = ${(iwramAt(0x7FF8) >>> 0).toString(16)}`);
+console.log(`HBLANK Vector   @ IWRAM[0x7FF4] = ${(iwramAt(0x7FF4) >>> 0).toString(16)}`);
+
+// Sample a chunk of VRAM to see if anything was written.
+const vramNonZero = Array.from(emu.bus.vram).reduce((a, b) => a + (b ? 1 : 0), 0);
+const pramNonZero = Array.from(emu.bus.pram).reduce((a, b) => a + (b ? 1 : 0), 0);
+const oamNonZero = Array.from(emu.bus.oam).reduce((a, b) => a + (b ? 1 : 0), 0);
+const ewramNonZero = Array.from(emu.bus.ewram).reduce((a, b) => a + (b ? 1 : 0), 0);
+console.log(`Non-zero bytes  VRAM=${vramNonZero}/${emu.bus.vram.length}  PRAM=${pramNonZero}  OAM=${oamNonZero}  EWRAM=${ewramNonZero}`);
+console.log(`DISPCNT=${emu.ppu.dispcnt.toString(16)}  DISPSTAT=${emu.ppu.dispstat.toString(16)}  VCOUNT=${emu.ppu.vcount}  IE=${emu.irq.ie.toString(16)}  IF=${emu.irq.iflag.toString(16)}  IME=${emu.irq.ime}`);
+console.log(`IWRAM[310C-310F] (wait flag) = ${[0x310C,0x310D,0x310E,0x310F].map(o=>emu.bus.iwram[o].toString(16)).join(' ')}`);
+console.log(`SWI counts:`, Array.from(swiCounts.entries()).map(([k,v]) => `0x${k.toString(16)}=${v}`).join(' '));

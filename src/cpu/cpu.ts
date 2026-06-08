@@ -26,58 +26,100 @@ export class Cpu {
 
   reset(): void {
     this.state = new CpuState();
-    // Reset vector → r[15] = 0x00000000 (BIOS). With no BIOS we jump to ROM.
     this.state.cpsr = Mode.SVC | FLAG_F | FLAG_I;
-    // GBA cartridge boot bypass: when we don't have a real BIOS the ROM
-    // entry point is at 0x08000000 and CPU is in System mode.
+    // Cartridge boot bypass: CPU starts in System mode with SP at the
+    // canonical IWRAM stack, mirroring what the real BIOS post-init state
+    // looks like to the game.
     this.state.switchMode(Mode.SYS);
-    this.state.r[13] = 0x03007F00;       // user/sys SP
-    // Set up banked SPs for IRQ and Supervisor that BIOS would normally set.
+    this.state.r[13] = 0x03007F00;
     this.state.bank_r13[2] = 0x03007FA0; // IRQ
     this.state.bank_r13[3] = 0x03007FE0; // SVC
     this.state.r[15] = 0x08000000;
     this.prefetchedValid = false;
+    this.installBiosStub();
+  }
+
+  // Install a minimal BIOS stub:
+  //   - 0x00: reset vector (cart bypass: just branches to ROM entry)
+  //   - 0x18: IRQ vector → BIOS handler that calls user handler at
+  //           [0x03007FFC] and returns with the canonical SUBS PC, LR, #4.
+  // Without this, halted CPUs that get IRQ'd land in zero-filled BIOS and
+  // wander off into open bus.
+  private installBiosStub(): void {
+    const bios = this.bus.bios;
+    const wr32 = (off: number, v: number) => {
+      bios[off]     = v & 0xFF;
+      bios[off + 1] = (v >> 8) & 0xFF;
+      bios[off + 2] = (v >> 16) & 0xFF;
+      bios[off + 3] = (v >> 24) & 0xFF;
+    };
+    // 0x00 reset:  B 0x08000000 (branch to ROM entry). We just keep PC
+    //              there directly via reset(), but make the vector valid
+    //              in case the game soft-resets.
+    wr32(0x00, 0xEA000000 | (((0x08000000 - 8) >>> 2) & 0x00FFFFFF));
+    // 0x04 undef
+    wr32(0x04, 0xEAFFFFFE);
+    // 0x08 swi:   the CPU only lands here on SWI when HLE refuses. We
+    //              emulate the BIOS SWI handler in HLE, so loop forever.
+    wr32(0x08, 0xEAFFFFFE);
+    // 0x0C prefetch abort
+    wr32(0x0C, 0xEAFFFFFE);
+    // 0x10 data abort
+    wr32(0x10, 0xEAFFFFFE);
+    // 0x14 reserved
+    wr32(0x14, 0xEAFFFFFE);
+    // 0x18 IRQ: B 0x128 — jump to the dispatcher below.
+    wr32(0x18, 0xEA00003A);  // offset = (0x128 - (0x18 + 8)) / 4 = 0x3A
+    // 0x1C FIQ
+    wr32(0x1C, 0xEAFFFFFE);
+
+    // IRQ dispatcher at 0x128 — calls user handler stored at 0x03007FFC.
+    wr32(0x128, 0xE92D500F);  // STMFD SP!, {R0-R3, R12, LR}
+    wr32(0x12C, 0xE3A00301);  // MOV R0, #0x4000000
+    wr32(0x130, 0xE28FE000);  // ADR LR, 0x138
+    wr32(0x134, 0xE510F004);  // LDR PC, [R0, #-4]    ; loads from 0x03FFFFFC
+                              // — actually we use 0x03007FFC; the standard
+                              //   trick is MOV R0,#0x4000000 + LDR [R0,#-4]
+                              //   reads 0x03FFFFFC, which is mirrored from
+                              //   0x03007FFC. We mirror IWRAM at the bus,
+                              //   so this works.
+    wr32(0x138, 0xE8BD500F);  // LDMFD SP!, {R0-R3, R12, LR}
+    wr32(0x13C, 0xE25EF004);  // SUBS PC, LR, #4 (returns + restores CPSR)
   }
 
   flushPipeline(): void {
     this.prefetchedValid = false;
   }
 
-  // Single dispatch: fetch, advance PC, execute. Returns cycles consumed.
+  // Single dispatch — fetch from r[15] (= next decode addr), temporarily
+  // raise r[15] to the architectural visible PC for execute, then advance
+  // to the next decode address if execute didn't branch.
   step(): number {
     const s = this.state;
     if (s.halted) {
-      // Halted — burn a cycle until IRQ wakes us.
       if (this.irqLine && !(s.cpsr & FLAG_I)) s.halted = false;
       this.cycles += 1;
       return 1;
     }
-
-    // Service IRQ between instructions.
     if (this.irqLine && !(s.cpsr & FLAG_I)) {
       this.takeIrq();
     }
 
-    if (s.cpsr & FLAG_T) {
-      // THUMB: PC visible = decoded+4.
-      const pc = s.r[15];
-      const fetchAddr = (pc - 4) >>> 0;
-      const instr = this.bus.read16(fetchAddr);
-      s.r[15] = (pc + 2) >>> 0;
-      thumbExecute(this, instr);
-      // After execute, if PC wasn't flushed we keep walking forward — the
-      // architectural PC view is pc+4 for the next instruction.
-      this.cycles += 1;
-      return 1;
-    } else {
-      const pc = s.r[15];
-      const fetchAddr = (pc - 8) >>> 0;
-      const instr = this.bus.read32(fetchAddr);
-      s.r[15] = (pc + 4) >>> 0;
-      armExecute(this, instr);
-      this.cycles += 1;
-      return 1;
-    }
+    const isThumb = (s.cpsr & FLAG_T) !== 0;
+    const insnSize = isThumb ? 2 : 4;
+    const prefetchOff = isThumb ? 4 : 8;
+    const decode = s.r[15] & (isThumb ? ~1 : ~3);
+    const instr = isThumb ? this.bus.read16(decode) : this.bus.read32(decode);
+    const visible = (decode + prefetchOff) >>> 0;
+    s.r[15] = visible;
+
+    if (isThumb) thumbExecute(this, instr);
+    else         armExecute(this, instr);
+
+    // No branch happened → advance to next decode.
+    if (s.r[15] === visible) s.r[15] = (decode + insnSize) >>> 0;
+    this.cycles += 1;
+    return 1;
   }
 
   // Trigger exception entry — called from arm/thumb dispatch.
@@ -93,14 +135,12 @@ export class Cpu {
     this.flushPipeline();
   }
 
-  // Take an IRQ exception — drives the IRQ vector at 0x18.
+  // Take an IRQ exception. r[15] at entry is the next decode address.
+  // BIOS uses SUBS PC, LR, #4 to return, so LR = next_decode + 4 lands
+  // PC back at next_decode after restore.
   takeIrq(): void {
     const s = this.state;
-    const inThumb = (s.cpsr & FLAG_T) !== 0;
-    // Saved PC must point to next-to-execute instruction + 4 (the LR offset
-    // ARM expects for IRQ is +4, so we save current PC and let the handler
-    // subtract 4 in its return).
-    const ret = inThumb ? (s.r[15]) >>> 0 : (s.r[15] - 4) >>> 0;
+    const ret = (s.r[15] + 4) >>> 0;
     s.enterException(Mode.IRQ, 0x18, ret, false);
     this.flushPipeline();
   }
