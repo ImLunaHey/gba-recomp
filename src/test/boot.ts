@@ -87,6 +87,34 @@ emu.cpu.takeIrq = () => {
   irqIfHist.set(ifv, (irqIfHist.get(ifv) || 0) + 1);
   origTakeIrq();
 };
+if (process.env.DUMP_SPRITE_FRAME) {
+  const f = parseInt(process.env.DUMP_SPRITE_FRAME, 10) || 60;
+  for (let i = 0; i < f; i++) emu.runFrame();
+  console.log(`\nAfter ${f} frames:`);
+  console.log(`DISPCNT = 0x${emu.ppu.dispcnt.toString(16)}  (OBJ-map = ${(emu.ppu.dispcnt & 0x40) ? '1D' : '2D'})`);
+  let active = 0;
+  for (let i = 0; i < 128; i++) {
+    const o = i * 8;
+    const a0 = emu.bus.oam[o] | (emu.bus.oam[o+1] << 8);
+    const a1 = emu.bus.oam[o+2] | (emu.bus.oam[o+3] << 8);
+    const a2 = emu.bus.oam[o+4] | (emu.bus.oam[o+5] << 8);
+    if ((a0 & 0x300) === 0x200) continue;
+    const yPos = a0 & 0xFF;
+    const xPos = a1 & 0x1FF;
+    const shape = (a0 >> 14) & 3;
+    const size = (a1 >> 14) & 3;
+    const c8 = (a0 & 0x2000) ? 8 : 4;
+    const tileIdx = a2 & 0x3FF;
+    const palBank = (a2 >> 12) & 0xF;
+    const prio = (a2 >> 10) & 3;
+    if (active < 32) {
+      console.log(`  OAM[${i.toString().padStart(2)}]  a0=0x${a0.toString(16).padStart(4,'0')} a1=0x${a1.toString(16).padStart(4,'0')} a2=0x${a2.toString(16).padStart(4,'0')}  shape=${shape} size=${size} ${c8}bpp tile=${tileIdx} pal=${palBank} prio=${prio} pos=(${xPos},${yPos})`);
+    }
+    active++;
+  }
+  console.log(`Total active sprites: ${active}`);
+  process.exit(0);
+}
 const swiCounts = new Map<number, number>();
 const origSwi = emu.cpu.softwareInterrupt.bind(emu.cpu);
 emu.cpu.softwareInterrupt = (n: number) => {
