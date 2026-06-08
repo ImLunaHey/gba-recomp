@@ -42,6 +42,7 @@ export function App() {
   const [log, setLog] = useState<string[]>(['gba-recomp — pick a ROM to start']);
   const [headerInfo, setHeaderInfo] = useState<string>('');
   const [showCp, setShowCp] = useState(false);
+  const [mapVersion, setMapVersion] = useState(0);
   const [showLib, setShowLib] = useState(false);
   const [currentRom, setCurrentRom] = useState<RomMeta | null>(null);
   const romBufRef = useRef<Uint8Array | null>(null);
@@ -53,6 +54,7 @@ export function App() {
     keypad: emu.keypad,
     onConnected: (name) => append(`controller connected: ${name}`),
     onDisconnected: (name) => append(`controller disconnected: ${name}`),
+    mapVersion,
   });
   useKeypadHighlight(emu.keypad);
 
@@ -184,7 +186,11 @@ export function App() {
         <span>keys: arrows · z/x · a/s · enter/shift · saves auto-persist to browser storage</span>
       </div>
       <LogPane lines={log} />
-      <ControllerPanel open={showCp} onClose={() => setShowCp(false)} />
+      <ControllerPanel
+        open={showCp}
+        onClose={() => setShowCp(false)}
+        onChange={() => setMapVersion((v) => v + 1)}
+      />
       <RomLibrary
         open={showLib}
         currentId={currentRom?.id ?? null}
