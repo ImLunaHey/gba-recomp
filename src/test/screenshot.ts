@@ -317,6 +317,15 @@ console.log(`DISPCNT=0x${emu.ppu.dispcnt.toString(16)}  mode=${emu.ppu.dispcnt &
 writePpm(outPath);
 dumpPpu('final');
 dumpSound();
+// Optional: re-render the final frame with BLDY clamped to 0 so we can
+// see what the game's actually drawing underneath any fade.
+if (process.env.NO_FADE) {
+  emu.ppu.bldy = 0;
+  emu.ppu.bldcnt = 0;
+  emu.ppu.frameDone = false;
+  emu.runFrame();
+  writePpm(outPath.replace(/\.ppm$/, '-nofade.ppm'));
+}
 if (process.env.AUDIO_AUDIT) {
   // Actual cycles per frame (emu's internal cycle counter advance).
   const cycStart = (globalThis as any).__cycStart ?? 0;
