@@ -1,9 +1,11 @@
 import { useEffect, useRef } from 'react';
 import type { Emulator } from '../emulator';
+import type { AudioSink } from './audio';
 
 interface Props {
   emu: Emulator;
   paused: boolean;
+  audio: AudioSink;
   onStats: (s: string) => void;
 }
 
@@ -15,7 +17,7 @@ interface Props {
 const GBA_FRAME_MS = 1000 / 59.7275;
 const MAX_FRAMES_PER_RAF = 4;
 
-export function Screen({ emu, paused, onStats }: Props) {
+export function Screen({ emu, paused, audio, onStats }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -49,6 +51,9 @@ export function Screen({ emu, paused, onStats }: Props) {
         accumMs -= GBA_FRAME_MS;
         didFrame = true;
         blitted++;
+        // Drain the sound output for this frame into the Web Audio sink.
+        const samples = emu.sound.drainOutput();
+        if (samples.length > 0) audio.push(samples);
       }
       if (didFrame) {
         imageData.data.set(emu.ppu.frame);

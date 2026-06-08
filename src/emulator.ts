@@ -8,6 +8,7 @@ import { Dma } from './io/dma';
 import { Timers } from './io/timers';
 import { Irq } from './io/irq';
 import { Keypad } from './io/keypad';
+import { Sound } from './io/sound';
 import { BiosHle } from './bios/hle';
 import { Recompiler } from './recomp/compiler';
 
@@ -24,6 +25,7 @@ export class Emulator {
   timers: Timers;
   cpu: Cpu;
   io: Io;
+  sound: Sound;
   bios: BiosHle;
   recomp: Recompiler;
   // Cumulative cycle budget. We over- or under-run by up to one scanline.
@@ -35,6 +37,9 @@ export class Emulator {
     this.ppu = new Ppu(this.bus, this.irq, this.dma);
     this.cpu = new Cpu(this.bus);
     this.io = new Io(this.bus, this.ppu, this.dma, this.timers, this.irq, this.keypad, this.cpu);
+    this.sound = new Sound(this.dma);
+    this.timers.sound = this.sound;
+    this.io.sound = this.sound;
     this.bios = new BiosHle(this.cpu, this.bus);
     this.cpu.bios = this.bios;
     this.recomp = new Recompiler(this.cpu);

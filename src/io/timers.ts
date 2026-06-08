@@ -1,4 +1,5 @@
 import { Irq, IRQ_TIMER0 } from './irq';
+import type { Sound } from './sound';
 
 // Four 16-bit timers. Each has:
 //   reload (TMxCNT_L on write), counter (TMxCNT_L on read), control bits
@@ -24,6 +25,11 @@ export class TimerChannel {
 
 export class Timers {
   ch = [new TimerChannel(), new TimerChannel(), new TimerChannel(), new TimerChannel()];
+
+  // Set lazily by Emulator after construction (Sound depends on DMA
+  // which is also wired up via the constructor chain, so we can't get
+  // it via parameter without a refactor).
+  sound: Sound | null = null;
 
   constructor(public irq: Irq) {}
 
@@ -62,6 +68,10 @@ export class Timers {
     const c = this.ch[i];
     c.counter = c.reload;
     if (c.irqEnable) this.irq.raise(IRQ_TIMER0 << i);
+    // Direct Sound A/B are driven by Timer 0 or Timer 1 overflow.
+    if (this.sound && (i === 0 || i === 1)) {
+      this.sound.onTimerOverflow(i as 0 | 1);
+    }
     // Cascade to next channel if it is count-up.
     if (i < 3) {
       const next = this.ch[i + 1];

@@ -9,6 +9,7 @@ import { useKeypadHighlight } from './useKeypadHighlight';
 import { ControllerPanel } from './ControllerPanel';
 import { RomLibrary } from './RomLibrary';
 import { getRomBytes, getSelectedRom, setSelectedRom, type RomMeta } from './romStore';
+import { AudioSink } from './audio';
 
 function bytesToBase64(bytes: Uint8Array): string {
   let bin = '';
@@ -36,6 +37,9 @@ export function App() {
   const emuRef = useRef<Emulator | null>(null);
   if (!emuRef.current) emuRef.current = new Emulator();
   const emu = emuRef.current;
+  const audioRef = useRef<AudioSink | null>(null);
+  if (!audioRef.current) audioRef.current = new AudioSink();
+  const audio = audioRef.current;
 
   const [paused, setPaused] = useState(false);
   const [stats, setStats] = useState('— fps · — Mhz');
@@ -104,9 +108,12 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Keyboard bindings.
+  // Keyboard bindings + Web Audio unlock. Browsers refuse to start an
+  // AudioContext without a user gesture, so we resume on any keypress
+  // or pointer-down — the first interaction triggers it transparently.
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
+      audio.resume();
       const k = KEY_MAP[e.key];
       if (k !== undefined) { emu.keypad.press(k); e.preventDefault(); }
     };
@@ -114,13 +121,16 @@ export function App() {
       const k = KEY_MAP[e.key];
       if (k !== undefined) { emu.keypad.release(k); e.preventDefault(); }
     };
+    const ptr = () => audio.resume();
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
+    window.addEventListener('pointerdown', ptr);
     return () => {
       window.removeEventListener('keydown', down);
       window.removeEventListener('keyup', up);
+      window.removeEventListener('pointerdown', ptr);
     };
-  }, [emu]);
+  }, [emu, audio]);
 
   const onReset = () => {
     if (!romBufRef.current) return;
@@ -167,7 +177,7 @@ export function App() {
         <h1 className="text-sm m-0 tracking-wide opacity-80">GBA-RECOMP · Hybrid WASM</h1>
         <div className="text-xs opacity-60">{headerInfo || 'no ROM loaded'}</div>
       </header>
-      <Screen emu={emu} paused={paused} onStats={setStats} />
+      <Screen emu={emu} paused={paused} audio={audio} onStats={setStats} />
       <div className="w-[720px] px-2 py-1 text-xs text-[var(--color-accent)] opacity-85 text-left">{stats}</div>
       <Gamepad keypad={emu.keypad} />
       <div className="flex gap-3 text-xs opacity-90 items-center w-[720px] flex-wrap">

@@ -5,6 +5,7 @@ import { Irq } from './irq';
 import { Keypad } from './keypad';
 import type { Ppu } from '../ppu/ppu';
 import type { Cpu } from '../cpu/cpu';
+import type { Sound } from './sound';
 
 export class Io implements IoBridge {
   // Generic backing store for IO regs (1 KB). Most reads/writes that don't
@@ -16,6 +17,11 @@ export class Io implements IoBridge {
   postflg = 0;
   haltcnt = 0;
   waitcnt = 0;
+
+  // Set by Emulator after construction (Sound depends on Dma, and the
+  // constructor signature was sealed before Sound existed). Optional so
+  // headless tests that don't care about audio don't need to wire it.
+  sound: Sound | null = null;
 
   constructor(
     public bus: Bus,
@@ -111,6 +117,25 @@ export class Io implements IoBridge {
       }
       this.raw16[addr >>> 1] = v;
       return;
+    }
+    // Sound block 0x060-0x0AF.
+    //   0x082 SOUNDCNT_H (DirectSound control: volume ratio, L/R enable, timer-sel, FIFO reset)
+    //   0x084 SOUNDCNT_X (master enable bit 7)
+    //   0x0A0..0x0A3 FIFO_A (4 bytes each MMIO write)
+    //   0x0A4..0x0A7 FIFO_B
+    if (this.sound) {
+      if (addr === 0x082) { this.sound.writeSoundcntH(v); this.raw16[addr >>> 1] = v & ~0x8800; return; }
+      if (addr === 0x084) { this.sound.writeSoundcntX(v); this.raw16[addr >>> 1] = v; return; }
+      if (addr === 0x0A0 || addr === 0x0A2) {
+        this.sound.pushA(v & 0xFF);
+        this.sound.pushA((v >> 8) & 0xFF);
+        return;
+      }
+      if (addr === 0x0A4 || addr === 0x0A6) {
+        this.sound.pushB(v & 0xFF);
+        this.sound.pushB((v >> 8) & 0xFF);
+        return;
+      }
     }
     // Timers 0x100-0x10E.
     if (addr >= 0x100 && addr <= 0x10E) {
