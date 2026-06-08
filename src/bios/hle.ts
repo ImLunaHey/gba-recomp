@@ -41,6 +41,13 @@ export class BiosHle {
       case 0x1E: case 0x1F: case 0x25: case 0x26:
         return true;                                // sound drivers — silent stub
     }
+    // SWI numbers outside 0x00-0x2A are not defined by the GBA BIOS;
+    // it dispatches them through a fixed-size jump table and effectively
+    // returns immediately for out-of-range numbers. Some games (e.g. Doom
+    // II via SWIEQ #0x890000) hit these as conditional no-ops the BIOS
+    // is expected to swallow. Falling through to the SVC vector here
+    // would otherwise land on our BIOS infinite-loop stub and hang.
+    if (comment > 0x2A) return true;
     return false;
   }
 
