@@ -412,6 +412,55 @@ describe('IO register behavior', () => {
   });
 });
 
+describe('Halt + IRQ wakeup (the boot stall pattern)', () => {
+  it('halted CPU wakes on IRQ pending + enabled', () => {
+    const { cpu, bus } = setupRunArm([]);
+    cpu.state.halted = true;
+    cpu.state.cpsr = Mode.SYS;  // I bit clear → IRQ enabled
+    const irq = (bus.io as any).irq;
+    irq.ime = 1;
+    irq.ie = 0x0001;  // VBlank
+    irq.iflag = 0x0001;  // VBlank pending
+    // emulator.runFrame normally syncs irqLine; do it manually.
+    cpu.irqLine = irq.pending();
+    expect(cpu.irqLine).toBe(true);
+    cpu.step();  // un-halts but doesn't take IRQ
+    expect(cpu.state.halted).toBe(false);
+    cpu.step();  // takes IRQ; same step also fetches+executes vector instr (B 0x128)
+    expect(cpu.state.mode()).toBe(Mode.IRQ);
+    // BIOS stub at 0x18 is `B 0x128` — the branch executed in this step, so
+    // PC is now at the dispatcher.
+    expect(cpu.state.r[15]).toBe(0x128);
+  });
+
+  it('halted CPU stays halted when CPSR.I masks IRQ', () => {
+    const { cpu, bus } = setupRunArm([]);
+    cpu.state.halted = true;
+    cpu.state.cpsr = Mode.SYS | 0x80;  // I bit set → IRQ masked
+    const irq = (bus.io as any).irq;
+    irq.ime = 1;
+    irq.ie = 0x0001;
+    irq.iflag = 0x0001;
+    cpu.irqLine = irq.pending();
+    cpu.step();
+    expect(cpu.state.halted).toBe(true);  // stays halted
+  });
+
+  it('halted CPU stays halted when IME=0', () => {
+    const { cpu, bus } = setupRunArm([]);
+    cpu.state.halted = true;
+    cpu.state.cpsr = Mode.SYS;
+    const irq = (bus.io as any).irq;
+    irq.ime = 0;  // master disable
+    irq.ie = 0x0001;
+    irq.iflag = 0x0001;
+    cpu.irqLine = irq.pending();
+    expect(cpu.irqLine).toBe(false);  // pending() respects IME
+    cpu.step();
+    expect(cpu.state.halted).toBe(true);
+  });
+});
+
 describe('Memory mirrors and rotations', () => {
   it('IWRAM mirrors every 32 KB', () => {
     const { bus } = setupRunArm([]);
