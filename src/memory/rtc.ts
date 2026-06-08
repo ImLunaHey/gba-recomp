@@ -102,8 +102,12 @@ export class Rtc {
             }
           }
         }
-        // SIO is also an open-line we mirror back.
-        this.data = newSio;
+        // SIO mirror: ONLY during cmd/recv (host is driving) do we follow
+        // newSio. In reply state the chip is driving and we must preserve
+        // the bit we put on the line on the rising edge above; otherwise
+        // the host always reads back its own (typically zero) SIO write
+        // instead of the chip's reply data.
+        if (this.state === 'cmd' || this.state === 'recv') this.data = newSio;
         return;
       }
       case 0xC6: this.dir = v & 0x7; return;
@@ -117,6 +121,14 @@ export class Rtc {
     this.cmd = cmd;
     this.cursor = 0;
     this.bits = 0;
+    // Critical: must clear `buffer` here too. The recv path ORs new bits
+    // into `buffer`, so any leftover bits from the command byte would
+    // leak straight into the data byte. (Pokemon Ruby writes 0x42 to
+    // status register; without this reset, buffer stayed at 0x62 from
+    // the preceding write-status command and the writeback "succeeded"
+    // with a corrupted value, so the subsequent status read mismatched
+    // and the game flagged "battery has run dry".)
+    this.buffer = 0;
     this.payload = [];
 
     // S-3511A command byte: bits 7..4 = 0110, bit 3..1 = reg, bit 0 = R/W (1 = read).
