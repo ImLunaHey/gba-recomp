@@ -68,14 +68,51 @@ export class BiosHle {
     if (mask & 0x04) this.bus.pram.fill(0);
     if (mask & 0x08) this.bus.vram.fill(0);
     if (mask & 0x10) this.bus.oam.fill(0);
-    // 0x20 sio, 0x40 sound — ignored in HLE.
-    if (mask & 0x80) {
-      // "Other IO" reset. The real GBA BIOS clears DISPCNT/etc to 0,
-      // but it also writes 0x0100 to BG2_PA, BG2_PD, BG3_PA, BG3_PD —
-      // the identity matrix. Games (notably Pokemon FireRed's Oak
-      // intro) rely on this default: they enable BG2 affine and never
-      // touch PA/PD, expecting identity sampling.
-      const ppu = (this.cpu.bus.io as any)?.ppu;
+    const io = this.cpu.bus.io as any;
+    // bit 5 — SIO regs. The real BIOS clears SIODATA0..3, SIOCNT, JOYCNT,
+    // etc. and flips RCNT into "general purpose" mode (0x8000). Games
+    // (Doom II's RegisterRamReset(0xFD) retry path is the trigger we saw)
+    // expect this baseline; without it RCNT lingers at 0 = serial mode
+    // and the game's link-cable probe never disengages.
+    if ((mask & 0x20) && io) {
+      // 0x120-0x12C: SIODATA / SIOMULTI / SIODATA8
+      for (let a = 0x120; a <= 0x12C; a += 2) io.write16(a, 0);
+      io.write16(0x128, 0);                    // SIOCNT
+      io.write16(0x134, 0x8000);               // RCNT — general purpose
+      io.write16(0x140, 0);                    // JOYCNT
+      io.write16(0x150, 0); io.write16(0x152, 0); // JOY_RECV
+      io.write16(0x154, 0); io.write16(0x156, 0); // JOY_TRANS
+      io.write16(0x158, 0);                    // JOYSTAT
+    }
+    // bit 6 — Sound. Clear sound channels 1-4 + DirectSound control,
+    // then re-enable master (SOUNDCNT_X = 0x80) and set SOUNDBIAS to
+    // the BIOS default of 0x200.
+    if ((mask & 0x40) && io) {
+      for (let a = 0x060; a <= 0x0A6; a += 2) io.write16(a, 0);
+      io.write16(0x084, 0x0080);               // SOUNDCNT_X master enable
+      io.write16(0x088, 0x0200);               // SOUNDBIAS default
+      // Wave RAM banks (0x90-0x9F) — clear both banks.
+      if (io.sound) {
+        // No external waveRam in our HLE-only sound module; the writes
+        // above already covered the registers we expose.
+      }
+    }
+    // bit 7 — "everything else". GBATEK lists DISPSTAT, BG control/scroll,
+    // BG2/3 affine, mosaic, window, blend, DMA, timer, IRQ, WAITCNT,
+    // POSTFLG, HALTCNT. DISPCNT is documented to get force-blank (bit 7
+    // set, all else 0). The affine BG defaults (PA/PD = 0x100) we used
+    // to set unconditionally are part of this bit's contract — Pokemon
+    // FireRed's Oak intro relies on them.
+    if ((mask & 0x80) && io) {
+      io.write16(0x000, 0x0080);               // DISPCNT force blank
+      for (let a = 0x004; a <= 0x056; a += 2) io.write16(a, 0);
+      for (let a = 0x0B0; a <= 0x0DE; a += 2) io.write16(a, 0);
+      for (let a = 0x100; a <= 0x10E; a += 2) io.write16(a, 0);
+      io.write16(0x200, 0);                    // IE
+      io.write16(0x202, 0xFFFF);               // IF (write 1s to clear)
+      io.write16(0x204, 0);                    // WAITCNT
+      io.write16(0x208, 0);                    // IME
+      const ppu = io.ppu;
       if (ppu) {
         ppu.bgPA[0] = 0x100; ppu.bgPD[0] = 0x100;  // BG2 identity
         ppu.bgPA[1] = 0x100; ppu.bgPD[1] = 0x100;  // BG3 identity
