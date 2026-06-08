@@ -17,7 +17,7 @@ export function DebugPanel({ open, emu, onClose }: Props) {
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[1000]" onClick={onClose}>
       <div
-        className="bg-[#14141a] border border-[#2a2a30] rounded-lg p-4 w-[860px] max-h-[90vh] overflow-hidden shadow-2xl flex flex-col"
+        className="bg-[#14141a] border border-[#2a2a30] rounded-lg p-4 w-full max-w-[860px] mx-2 max-h-[90vh] overflow-hidden shadow-2xl flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-between items-center mb-3 pb-2 border-b border-[#2a2a30]">

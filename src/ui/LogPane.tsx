@@ -10,7 +10,7 @@ export function LogPane({ lines }: Props) {
   return (
     <div
       ref={ref}
-      className="w-[720px] h-[120px] overflow-auto bg-[#0e0e12] border border-[#1c1c20] p-2 text-[11px] text-[var(--color-muted)] whitespace-pre-wrap"
+      className="w-full max-w-[720px] h-[120px] overflow-auto bg-[#0e0e12] border border-[#1c1c20] p-2 text-[11px] text-[var(--color-muted)] whitespace-pre-wrap"
     >
       {lines.map((l, i) => <div key={i}>{l}</div>)}
     </div>

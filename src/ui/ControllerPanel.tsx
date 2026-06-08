@@ -112,7 +112,7 @@ export function ControllerPanel({ open, onClose, onChange }: Props) {
       onClick={onClose}
     >
       <div
-        className="bg-[#14141a] border border-[#2a2a30] rounded-lg p-5 w-[760px] max-h-[88vh] overflow-y-auto shadow-2xl"
+        className="bg-[#14141a] border border-[#2a2a30] rounded-lg p-5 w-full max-w-[760px] mx-2 max-h-[88vh] overflow-y-auto shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-between items-center mb-4 pb-3 border-b border-[#2a2a30]">

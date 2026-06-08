@@ -15,14 +15,21 @@
 
 :root { color-scheme: dark; }
 html, body { @apply m-0 p-0 h-full; background: var(--color-bg); color: var(--color-fg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-body { @apply flex flex-col items-center gap-3 p-4; }
+body { @apply flex flex-col items-center gap-3; padding: 16px 8px; }
+@media (max-width: 480px) {
+  body { padding: 8px 4px; gap: 8px; }
+}
 
-/* GBA framebuffer canvas — pixelated at 3x scale. */
+/* GBA framebuffer canvas. The GBA is 240×160 (3:2) — at desktop we
+   draw it at 3× (720×480), but on narrow viewports we scale down
+   while preserving aspect ratio. Pixelated rendering is preserved at
+   every size. */
 canvas#screen {
   image-rendering: pixelated;
   image-rendering: crisp-edges;
-  width: 720px;
-  height: 480px;
+  width: min(720px, calc(100vw - 16px));
+  aspect-ratio: 3 / 2;
+  height: auto;
   background: #000;
   border: 1px solid #1c1c20;
   box-shadow: 0 0 60px rgba(0, 0, 0, 0.7);
@@ -63,7 +70,10 @@ canvas#screen {
 .btn-default:hover:not(:disabled) { background: var(--color-card-hover); }
 .btn-default:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* GBA gamepad grid. */
+/* GBA gamepad grid. Shrinks with the viewport so it never overflows
+   the screen on a phone, but the touch targets stay at their full
+   36 px size (drawing them smaller would hurt usability — instead we
+   tighten the gaps so the whole control rig still fits ~360 px wide). */
 .gamepad {
   display: grid;
   grid-template-columns: auto 1fr auto;
@@ -72,9 +82,15 @@ canvas#screen {
     "dpad mid ab"
     "shoulder mid ab";
   gap: 8px;
-  width: 720px;
+  width: min(720px, calc(100vw - 16px));
   align-items: center;
   padding: 8px 0;
+}
+@media (max-width: 480px) {
+  .gamepad { gap: 4px; }
+  .gamepad .shoulder { gap: 4px; }
+  .gamepad .middle { gap: 4px; }
+  .gamepad .ab { gap: 8px; }
 }
 .gamepad .dpad { grid-area: dpad; display: grid; grid-template-rows: auto auto auto; justify-items: center; gap: 2px; }
 .gamepad .dpad-row { display: flex; gap: 2px; }

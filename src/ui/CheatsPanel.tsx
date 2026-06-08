@@ -81,7 +81,7 @@ export function CheatsPanel({ open, gameCode, cheats, onChange, onClose }: Props
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[1000]" onClick={onClose}>
       <div
-        className="bg-[#14141a] border border-[#2a2a30] rounded-lg p-4 w-[680px] max-h-[88vh] overflow-y-auto shadow-2xl"
+        className="bg-[#14141a] border border-[#2a2a30] rounded-lg p-4 w-full max-w-[680px] mx-2 max-h-[88vh] overflow-y-auto shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-between items-center mb-3 pb-2 border-b border-[#2a2a30]">
