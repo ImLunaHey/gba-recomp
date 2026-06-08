@@ -7,6 +7,7 @@ const path = process.argv[2] ?? 'public/firered.gba';
 const rom = new Uint8Array(readFileSync(path));
 if (process.env.TRACE_CPUSET) (globalThis as any).__traceCpuSet = true;
 if (process.env.DUMP_OAM) (globalThis as any).__dumpOam = true;
+if (process.env.PRESS_A_EVERY) (globalThis as any).__pressAEvery = parseInt(process.env.PRESS_A_EVERY, 10);
 if (process.env.TRACE_BL) {
   const seen = new Map<string, number>();
   (globalThis as any).__traceBL = (from: number, to: number) => {
@@ -136,8 +137,11 @@ if (process.env.PRESS_A) emu.keypad.press(Key.A);
 
 let lastPc = 0;
 const start = performance.now();
+const pressAEvery = process.env.PRESS_A_EVERY ? parseInt(process.env.PRESS_A_EVERY, 10) : 0;
 for (let i = 0; i < frames; i++) {
   try {
+    if (pressAEvery && i % pressAEvery === 0) emu.keypad.press(Key.A);
+    if (pressAEvery && i % pressAEvery === pressAEvery / 2) emu.keypad.release(Key.A);
     const r = emu.runFrame();
     if (i < 5 || i === frames - 1) {
       const s = emu.cpu.state;
