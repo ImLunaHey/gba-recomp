@@ -127,6 +127,10 @@ Not implemented yet:
 - **Savestates** (snapshot/restore of full emulator state — in-cart saves work).
 - **Cheats** (GameShark / Action Replay / Code Breaker).
 
+## Bugs / requests
+
+[github.com/ImLunaHey/gba-recomp/issues](https://github.com/ImLunaHey/gba-recomp/issues) — please include the game, what you were doing, and (if a visual bug) a screenshot. If you can reproduce it from a fresh boot with a specific sequence of inputs, even better.
+
 ## Tech
 
 - TypeScript everywhere

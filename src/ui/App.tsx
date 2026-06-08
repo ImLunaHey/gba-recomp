@@ -192,8 +192,14 @@ export function App() {
         <button onClick={onClearSave} className="btn-default" disabled={!currentRom}>Clear Save</button>
         <button onClick={() => setShowCp(true)} className="btn-default">Controller…</button>
       </div>
-      <div className="flex gap-3 text-xs opacity-70 items-center w-[720px]">
+      <div className="flex gap-3 text-xs opacity-70 items-center w-[720px] justify-between">
         <span>keys: arrows · z/x · a/s · enter/shift · saves auto-persist to browser storage</span>
+        <a
+          href="https://github.com/ImLunaHey/gba-recomp/issues"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[var(--color-accent)] opacity-80 hover:opacity-100 underline decoration-dotted"
+        >Report an issue ↗</a>
       </div>
       <LogPane lines={log} />
       <ControllerPanel
