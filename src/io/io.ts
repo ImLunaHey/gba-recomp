@@ -76,6 +76,15 @@ export class Io implements IoBridge {
       case 0x202: return this.irq.iflag & 0x3FFF;
       case 0x204: return this.waitcnt;
       case 0x208: return this.irq.ime & 1;
+
+      // DMA CNT_H reads need to return the live channel state, not the
+      // last MMIO write — games (Crash Bandicoot) poll the enable bit to
+      // detect transfer completion, and the raw-mirror would forever
+      // report "still enabled" even after we cleared it on completion.
+      case 0x0BA: return this.dma.ch[0].control;
+      case 0x0C6: return this.dma.ch[1].control;
+      case 0x0D2: return this.dma.ch[2].control;
+      case 0x0DE: return this.dma.ch[3].control;
     }
     return this.raw16[addr >>> 1];
   }

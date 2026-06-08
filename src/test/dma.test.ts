@@ -206,6 +206,35 @@ describe('DMA: HBlank repeat (per-scanline)', () => {
   });
 });
 
+describe('DMA: completion observable via CNT_H readback', () => {
+  it('reading DMA3 control after immediate completion shows enable bit cleared', () => {
+    const { bus } = makeEmu();
+    // Game starts an immediate DMA, then polls CNT_H for the enable bit
+    // to clear. This was the Crash Bandicoot freeze: my code cleared the
+    // channel's enable flag but left the raw MMIO mirror with the
+    // written value (0x8000), so the polling loop never exited.
+    triggerDma(bus, 3, 0x03000100, 0x03000200, 1, 0x8000);
+    // CNT_H at DMA3 = 0x040000DE.
+    expect(bus.read16(0x040000DE) & 0x8000).toBe(0);
+  });
+
+  it('DMA0..2 enable bit also clears on completion', () => {
+    const { bus } = makeEmu();
+    for (let ch = 0; ch < 3; ch++) {
+      triggerDma(bus, ch, 0x03000100, 0x03000200, 1, 0x8000);
+      const cntAddr = 0x040000BA + ch * 12;
+      expect(bus.read16(cntAddr) & 0x8000).toBe(0);
+    }
+  });
+
+  it('repeat-mode DMA keeps the enable bit set across triggers', () => {
+    const { bus, dma } = makeEmu();
+    triggerDma(bus, 3, 0x03000100, 0x07000000, 1, 0x8000 | 0x0200 | 0x1000);
+    dma.triggerVBlank();
+    expect(bus.read16(0x040000DE) & 0x8000).not.toBe(0);  // stays enabled
+  });
+});
+
 describe('DMA: IRQ on completion', () => {
   it('Channel with IRQ enable raises IRQ_DMA0..3 on completion', () => {
     const { bus, dma, irq } = makeEmu();
