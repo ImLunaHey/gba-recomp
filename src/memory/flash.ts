@@ -105,16 +105,10 @@ export class Flash128K implements SaveBridge {
     if (this.state === FlashCmd.EraseAwaitSecond && addr === 0x2AAA && v === 0x55) {
       this.state = FlashCmd.EraseSector; return;
     }
-    // After EraseSector unlock, the chip accepts either:
-    //   0x30 → sectorAddr → erase that 4 KB sector (handled in the
-    //     switch at the top of write() under FlashCmd.EraseSector)
-    //   0x10 → 0x5555 → erase the whole chip
-    if (this.state === FlashCmd.EraseSector && addr === 0x5555 && v === 0x10) {
-      this.data.fill(0xFF);
-      this.state = FlashCmd.Normal;
-      if (this.onChange) this.onChange();
-      return;
-    }
+    // (The EraseSector dispatch — both 0x30 sector erase and 0x10 chip
+    //  erase — is handled at the top of write() inside the switch
+    //  statement, since the FlashCmd.EraseSector branch is checked
+    //  there before we reach the generic unlock paths.)
     // Generic unlock cycle 1.
     if (addr === 0x5555 && v === 0xAA) {
       this.state = FlashCmd.AwaitFirst;

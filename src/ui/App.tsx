@@ -4,6 +4,7 @@ import { Key } from '../io/keypad';
 import { Screen } from './Screen';
 import { Gamepad } from './Gamepad';
 import { LogPane } from './LogPane';
+import { useGamepad } from './useGamepad';
 
 const ROMS = [
   { value: '/firered.gba',  label: 'Pokemon FireRed' },
@@ -49,6 +50,12 @@ export function App() {
   const romBufRef = useRef<Uint8Array | null>(null);
 
   const append = (...args: unknown[]) => setLog((prev) => [...prev, args.map(String).join(' ')]);
+
+  useGamepad({
+    keypad: emu.keypad,
+    onConnected: (name) => append(`controller connected: ${name}`),
+    onDisconnected: (name) => append(`controller disconnected: ${name}`),
+  });
 
   // RTC GPIO interposer at ROM 0x080000C4/C6/C8. Set up once.
   useMemo(() => {

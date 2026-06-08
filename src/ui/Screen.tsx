@@ -7,7 +7,14 @@ interface Props {
   onStats: (s: string) => void;
 }
 
-// Canvas that blits the PPU frame buffer 60 times a second.
+// GBA refreshes at 59.7275 Hz. On a 120 Hz / ProMotion display rAF
+// fires faster than that, so running one emulator frame per rAF would
+// run the game at 2× speed. Accumulate elapsed real time and only step
+// as many emulator frames as fit, with a safety cap so backgrounding
+// the tab doesn't produce a runaway catch-up burst on resume.
+const GBA_FRAME_MS = 1000 / 59.7275;
+const MAX_FRAMES_PER_RAF = 4;
+
 export function Screen({ emu, paused, onStats }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -17,26 +24,44 @@ export function Screen({ emu, paused, onStats }: Props) {
     const imageData = ctx.createImageData(240, 160);
 
     let lastTs = performance.now();
+    let accumMs = 0;
     let fpsAvg = 0;
-    let frameCounter = 0;
+    let lastStatTs = performance.now();
+    let blitted = 0;
     let raf = 0;
     let stop = false;
+    let lastR = { interp: 0, jit: 0, frames: 0 };
 
     const loop = (ts: number) => {
       if (stop) return;
       raf = requestAnimationFrame(loop);
-      if (paused) return;
-      const r = emu.runFrame();
-      imageData.data.set(emu.ppu.frame);
-      ctx.putImageData(imageData, 0, 0);
       const dt = ts - lastTs;
       lastTs = ts;
-      const inst = 1000 / dt;
-      fpsAvg = fpsAvg ? fpsAvg * 0.9 + inst * 0.1 : inst;
-      frameCounter++;
-      if (frameCounter % 30 === 0) {
-        const total = r.interp + r.jit || 1;
-        const jitPct = ((r.jit / total) * 100) | 0;
+      if (paused) { accumMs = 0; return; }
+
+      accumMs += dt;
+      if (accumMs > GBA_FRAME_MS * MAX_FRAMES_PER_RAF) {
+        accumMs = GBA_FRAME_MS * MAX_FRAMES_PER_RAF;
+      }
+      let didFrame = false;
+      while (accumMs >= GBA_FRAME_MS) {
+        lastR = emu.runFrame();
+        accumMs -= GBA_FRAME_MS;
+        didFrame = true;
+        blitted++;
+      }
+      if (didFrame) {
+        imageData.data.set(emu.ppu.frame);
+        ctx.putImageData(imageData, 0, 0);
+      }
+      const sinceStat = ts - lastStatTs;
+      if (sinceStat >= 500) {
+        const inst = blitted * 1000 / sinceStat;
+        fpsAvg = fpsAvg ? fpsAvg * 0.6 + inst * 0.4 : inst;
+        lastStatTs = ts;
+        blitted = 0;
+        const total = lastR.interp + lastR.jit || 1;
+        const jitPct = ((lastR.jit / total) * 100) | 0;
         onStats(
           `${fpsAvg.toFixed(1)} fps · ${(280896 * fpsAvg / 1e6).toFixed(2)} MHz · jit ${jitPct}%`,
         );
