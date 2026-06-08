@@ -11,6 +11,7 @@ import { Timers } from './io/timers';
 import { Irq } from './io/irq';
 import { Keypad } from './io/keypad';
 import { Sound } from './io/sound';
+import { applyCheats, type Cheat } from './io/cheats';
 import { BiosHle } from './bios/hle';
 import { Recompiler } from './recomp/compiler';
 
@@ -22,6 +23,7 @@ export class Emulator {
   sram = new Sram32K();
   rtc = new Rtc();
   saveType: SaveType = 'flash128';
+  cheats: Cheat[] = [];
   // The currently-active save backend (= one of `flash` or `sram`,
   // picked by detectSaveType at loadRom time). Type widened to the
   // common SaveBridge so `Emulator.save` can be substituted freely
@@ -151,6 +153,12 @@ export class Emulator {
     // VBlank IRQ. Our HLE doesn't drive this through a real BIOS handler,
     // so we set it directly each frame.
     this.bus.iwram[0x7FF8] |= 0x01;
+    // Re-apply any enabled cheats at the END of the frame, after the
+    // game has had a chance to update RAM. This is the standard mGBA/
+    // VBA approach — cheats fire once per VBlank, which is enough to
+    // pin a value (HP, money, etc.) even if game code briefly
+    // overwrites it during the next frame.
+    if (this.cheats.length > 0) applyCheats(this.bus, this.cheats);
     return {
       interp: this.recomp.intInsns - intStart,
       jit: this.recomp.jitInsns - jitStart,

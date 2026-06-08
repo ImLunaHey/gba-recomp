@@ -8,7 +8,9 @@ import { useGamepad } from './useGamepad';
 import { useKeypadHighlight } from './useKeypadHighlight';
 import { ControllerPanel } from './ControllerPanel';
 import { DebugPanel } from './DebugPanel';
+import { CheatsPanel, loadCheatsFor } from './CheatsPanel';
 import { RomLibrary } from './RomLibrary';
+import type { Cheat } from '../io/cheats';
 import { getRomBytes, getSelectedRom, setSelectedRom, type RomMeta } from './romStore';
 import { AudioSink } from './audio';
 
@@ -48,9 +50,15 @@ export function App() {
   const [headerInfo, setHeaderInfo] = useState<string>('');
   const [showCp, setShowCp] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
+  const [showCheats, setShowCheats] = useState(false);
   const [showLog, setShowLog] = useState(false);
   const [showSaveMenu, setShowSaveMenu] = useState(false);
   const [mapVersion, setMapVersion] = useState(0);
+  // Mirror emu.cheats into React state so the CheatsPanel re-renders
+  // on add/edit/toggle. The emulator itself reads emu.cheats directly
+  // each frame, so we keep both in sync via setCheats below.
+  const [cheats, setCheatsState] = useState<Cheat[]>([]);
+  const setCheats = (next: Cheat[]) => { setCheatsState(next); emu.cheats = next; };
   const [showLib, setShowLib] = useState(false);
   const [currentRom, setCurrentRom] = useState<RomMeta | null>(null);
   const romBufRef = useRef<Uint8Array | null>(null);
@@ -92,6 +100,9 @@ export function App() {
     }
     setSelectedRom(id);
     append(`loaded "${title.trim() || code}" (${emu.saveType})`);
+    // Rehydrate cheats for this specific game code.
+    const rehydratedCheats = loadCheatsFor(code);
+    setCheats(rehydratedCheats);
     let writeTimer: number | null = null;
     emu.save.onChange = () => {
       if (writeTimer !== null) return;
@@ -232,6 +243,7 @@ export function App() {
         </div>
         <div className="flex-1" />
         <button onClick={() => setShowCp(true)} className="btn-default">🎮 Controller</button>
+        <button onClick={() => setShowCheats(true)} className="btn-default" disabled={!currentRom}>★ Cheats</button>
         <button onClick={() => setShowDebug(true)} className="btn-default" disabled={!currentRom}>🔍 Debug</button>
         <button onClick={() => setShowLog(!showLog)} className="btn-default">{showLog ? 'Hide Log' : 'Show Log'}</button>
       </div>
@@ -253,6 +265,13 @@ export function App() {
         onChange={() => setMapVersion((v) => v + 1)}
       />
       <DebugPanel open={showDebug} emu={emu} onClose={() => setShowDebug(false)} />
+      <CheatsPanel
+        open={showCheats}
+        gameCode={currentRom?.code ?? null}
+        cheats={cheats}
+        onChange={setCheats}
+        onClose={() => setShowCheats(false)}
+      />
       <RomLibrary
         open={showLib}
         currentId={currentRom?.id ?? null}
