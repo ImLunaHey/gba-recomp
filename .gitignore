@@ -8,3 +8,4 @@ public/*.sav
 *.gba
 *.sav
 _*.png
+tsconfig.tsbuildinfo
