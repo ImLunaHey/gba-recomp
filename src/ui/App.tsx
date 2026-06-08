@@ -7,6 +7,7 @@ import { LogPane } from './LogPane';
 import { useGamepad } from './useGamepad';
 import { useKeypadHighlight } from './useKeypadHighlight';
 import { ControllerPanel } from './ControllerPanel';
+import { DebugPanel } from './DebugPanel';
 import { RomLibrary } from './RomLibrary';
 import { getRomBytes, getSelectedRom, setSelectedRom, type RomMeta } from './romStore';
 import { AudioSink } from './audio';
@@ -46,6 +47,9 @@ export function App() {
   const [log, setLog] = useState<string[]>(['gba-recomp — pick a ROM to start']);
   const [headerInfo, setHeaderInfo] = useState<string>('');
   const [showCp, setShowCp] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
+  const [showLog, setShowLog] = useState(false);
+  const [showSaveMenu, setShowSaveMenu] = useState(false);
   const [mapVersion, setMapVersion] = useState(0);
   const [showLib, setShowLib] = useState(false);
   const [currentRom, setCurrentRom] = useState<RomMeta | null>(null);
@@ -180,39 +184,75 @@ export function App() {
   return (
     <>
       <header className="w-full max-w-[720px] flex justify-between items-baseline">
-        <h1 className="text-sm m-0 tracking-wide opacity-80">GBA-RECOMP · Hybrid WASM</h1>
-        <div className="text-xs opacity-60">{headerInfo || 'no ROM loaded'}</div>
+        <h1 className="text-sm m-0 tracking-wide opacity-80">gba-recomp</h1>
+        <div className="text-xs opacity-60 font-mono">{headerInfo || 'no ROM loaded'}</div>
       </header>
       <Screen emu={emu} paused={paused} audio={audio} onStats={setStats} />
-      <div className="w-[720px] px-2 py-1 text-xs text-[var(--color-accent)] opacity-85 text-left">{stats}</div>
-      <Gamepad keypad={emu.keypad} />
-      <div className="flex gap-3 text-xs opacity-90 items-center w-[720px] flex-wrap">
-        <button onClick={() => setShowLib(true)} className="btn-default">ROM Library…</button>
-        <button onClick={() => setPaused((p) => !p)} className="btn-default" disabled={!currentRom}>{paused ? 'Resume' : 'Pause'}</button>
-        <button onClick={onReset} className="btn-default" disabled={!currentRom}>Reset</button>
-        <button onClick={onDownloadSave} className="btn-default" disabled={!currentRom}>Export .sav</button>
-        <label className={`btn-default cursor-pointer ${!currentRom ? 'opacity-50 pointer-events-none' : ''}`}>
-          Import .sav
-          <input type="file" accept=".sav,.bin" onChange={onUploadSave} className="hidden" />
-        </label>
-        <button onClick={onClearSave} className="btn-default" disabled={!currentRom}>Clear Save</button>
-        <button onClick={() => setShowCp(true)} className="btn-default">Controller…</button>
+      <div className="w-[720px] flex justify-between items-center px-2 text-[11px]">
+        <span className="text-[var(--color-accent)] opacity-85 font-mono">{stats}</span>
+        <span className="opacity-50">arrows · z/x · a/s · enter/shift</span>
       </div>
-      <div className="flex gap-3 text-xs opacity-70 items-center w-[720px] justify-between">
-        <span>keys: arrows · z/x · a/s · enter/shift · saves auto-persist to browser storage</span>
+      <Gamepad keypad={emu.keypad} />
+
+      <div className="flex gap-2 text-xs items-center w-[720px] flex-wrap">
+        <button onClick={() => setShowLib(true)} className="btn-default">📂 Library</button>
+        <button onClick={() => setPaused((p) => !p)} className="btn-default" disabled={!currentRom}>{paused ? '▶ Resume' : '❚❚ Pause'}</button>
+        <button onClick={onReset} className="btn-default" disabled={!currentRom}>↻ Reset</button>
+        {/* Save submenu condenses Export/Import/Clear into one popover. */}
+        <div className="relative">
+          <button
+            onClick={() => setShowSaveMenu(!showSaveMenu)}
+            className="btn-default"
+            disabled={!currentRom}
+          >💾 Save ▾</button>
+          {showSaveMenu && currentRom && (
+            <div
+              className="absolute top-full left-0 mt-1 bg-[#1c1c22] border border-[#2a2a30] rounded-md shadow-xl z-50 min-w-[160px] py-1"
+              onMouseLeave={() => setShowSaveMenu(false)}
+            >
+              <button
+                onClick={() => { onDownloadSave(); setShowSaveMenu(false); }}
+                className="w-full text-left px-3 py-1.5 hover:bg-[#24242a] text-xs"
+              >Export .sav</button>
+              <label className="block w-full text-left px-3 py-1.5 hover:bg-[#24242a] cursor-pointer text-xs">
+                Import .sav
+                <input
+                  type="file"
+                  accept=".sav,.bin"
+                  onChange={(e) => { onUploadSave(e); setShowSaveMenu(false); }}
+                  className="hidden"
+                />
+              </label>
+              <button
+                onClick={() => { onClearSave(); setShowSaveMenu(false); }}
+                className="w-full text-left px-3 py-1.5 hover:bg-[#24242a] text-xs text-red-300"
+              >Clear save</button>
+            </div>
+          )}
+        </div>
+        <div className="flex-1" />
+        <button onClick={() => setShowCp(true)} className="btn-default">🎮 Controller</button>
+        <button onClick={() => setShowDebug(true)} className="btn-default" disabled={!currentRom}>🔍 Debug</button>
+        <button onClick={() => setShowLog(!showLog)} className="btn-default">{showLog ? 'Hide Log' : 'Show Log'}</button>
+      </div>
+
+      {showLog && <LogPane lines={log} />}
+
+      <div className="w-[720px] flex justify-end text-[10px] opacity-50">
         <a
           href="https://github.com/ImLunaHey/gba-recomp/issues"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-[var(--color-accent)] opacity-80 hover:opacity-100 underline decoration-dotted"
+          className="hover:opacity-100 hover:text-[var(--color-accent)]"
         >Report an issue ↗</a>
       </div>
-      <LogPane lines={log} />
+
       <ControllerPanel
         open={showCp}
         onClose={() => setShowCp(false)}
         onChange={() => setMapVersion((v) => v + 1)}
       />
+      <DebugPanel open={showDebug} emu={emu} onClose={() => setShowDebug(false)} />
       <RomLibrary
         open={showLib}
         currentId={currentRom?.id ?? null}
