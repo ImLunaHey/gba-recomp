@@ -104,8 +104,8 @@ const dt = performance.now() - start;
 console.log(`OK — ${frames} frames in ${dt.toFixed(0)}ms  (last pc=${lastPc.toString(16)})`);
 console.log(`vcountReads=${vcountReads}  lastValue=${lastVcountRead}  irqRaises=${irqRaises}  irqEntries=${irqEntries}`);
 
-// PC histogram during the next 10 frames.
-console.log('\nPC histogram (next 10 frames):');
+// PC histogram during the next 10 frames — finer bucket size.
+console.log('\nPC histogram (next 10 frames, 16-byte buckets):');
 const pcCount = new Map<number, number>();
 for (let f = 0; f < 10; f++) {
   let executed = 0;
@@ -117,18 +117,17 @@ for (let f = 0; f < 10; f++) {
     emu.ppu.step(cycles);
     emu.timers.step(cycles);
     executed += cycles;
-    if (executed % 1000 === 0) {
-      const pcBucket = emu.cpu.state.r[15] & ~0xFF;
+    if (executed % 200 === 0) {
+      const pcBucket = emu.cpu.state.r[15] & ~0xF;
       pcCount.set(pcBucket, (pcCount.get(pcBucket) || 0) + 1);
     }
     if (emu.ppu.frameDone) { emu.ppu.frameDone = false; break; }
   }
   if (!(emu.ppu.dispstat & 0x10)) emu.irq.iflag &= ~0x2;
-  emu.bus.iwram[0x310C] |= 0x01;
 }
-const sorted = Array.from(pcCount.entries()).sort((a,b)=>b[1]-a[1]).slice(0, 20);
+const sorted = Array.from(pcCount.entries()).sort((a,b)=>b[1]-a[1]).slice(0, 30);
 for (const [pc, count] of sorted) {
-  console.log(`  pc 0x${pc.toString(16)}xx  ${count}`);
+  console.log(`  pc 0x${pc.toString(16).padStart(8,'0')}  ${count}`);
 }
 
 // User IRQ handler pointer at 0x03007FFC (game writes its handler here).
