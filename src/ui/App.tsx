@@ -13,6 +13,19 @@ const ROMS = [
   { value: '/crash.gba',    label: 'Crash Bandicoot' },
 ];
 
+// Base64 helpers for stashing the 128 KB Flash buffer in localStorage.
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+function base64ToBytes(s: string): Uint8Array {
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
 const KEY_MAP: Record<string, Key> = {
   ArrowUp: Key.UP, ArrowDown: Key.DOWN, ArrowLeft: Key.LEFT, ArrowRight: Key.RIGHT,
   z: Key.A, Z: Key.A,
@@ -24,7 +37,7 @@ const KEY_MAP: Record<string, Key> = {
 };
 
 export function App() {
-  const emuRef = useRef<Emulator>();
+  const emuRef = useRef<Emulator | null>(null);
   if (!emuRef.current) emuRef.current = new Emulator();
   const emu = emuRef.current;
 
@@ -73,7 +86,9 @@ export function App() {
     };
   }, [emu]);
 
-  // ROM load.
+  const saveKeyRef = useRef<string>('');
+
+  // ROM load + per-ROM Flash persistence wiring.
   useEffect(() => {
     let cancelled = false;
     append(`fetching ${romPath}…`);
@@ -83,9 +98,35 @@ export function App() {
       romBufRef.current = bytes;
       const title = new TextDecoder('ascii').decode(bytes.subarray(0xA0, 0xAC)).replace(/\0/g, '');
       const code = new TextDecoder('ascii').decode(bytes.subarray(0xAC, 0xB0));
+      const saveKey = `gba-recomp:save:${code}`;
+      saveKeyRef.current = saveKey;
       append(`loaded ${bytes.length} bytes — "${title}" (${code})`);
       setHeaderInfo(`${title} · ${code}`);
       emu.loadRom(bytes);
+      // Restore in-game save from localStorage if present.
+      try {
+        const raw = localStorage.getItem(saveKey);
+        if (raw) {
+          const arr = base64ToBytes(raw);
+          emu.flash.loadSave(arr);
+          append(`restored save (${arr.length} bytes)`);
+        }
+      } catch (e) {
+        append('save restore failed:', (e as Error).message);
+      }
+      // Auto-persist on Flash writes (debounced).
+      let writeTimer: number | null = null;
+      emu.flash.onChange = () => {
+        if (writeTimer !== null) return;
+        writeTimer = window.setTimeout(() => {
+          writeTimer = null;
+          try {
+            localStorage.setItem(saveKey, bytesToBase64(emu.flash.data));
+          } catch (e) {
+            console.warn('Flash persist failed', e);
+          }
+        }, 250);
+      };
     });
     return () => { cancelled = true; };
   }, [romPath, emu]);
@@ -112,6 +153,42 @@ export function App() {
     if (!romBufRef.current) return;
     append('reset');
     emu.loadRom(romBufRef.current);
+    // Re-restore save after the reset wiped Flash.
+    try {
+      const raw = localStorage.getItem(saveKeyRef.current);
+      if (raw) emu.flash.loadSave(base64ToBytes(raw));
+    } catch { /* ignore */ }
+  };
+
+  const onDownloadSave = () => {
+    const blob = new Blob([emu.flash.data], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${headerInfo.split(' · ')[1] || 'gba'}.sav`;
+    a.click();
+    URL.revokeObjectURL(url);
+    append('downloaded .sav file');
+  };
+
+  const onUploadSave = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    file.arrayBuffer().then((buf) => {
+      emu.flash.loadSave(new Uint8Array(buf));
+      try {
+        localStorage.setItem(saveKeyRef.current, bytesToBase64(emu.flash.data));
+      } catch { /* ignore */ }
+      append(`uploaded save (${buf.byteLength} bytes)`);
+    });
+    e.target.value = '';
+  };
+
+  const onClearSave = () => {
+    if (!confirm('Delete the saved game data for this ROM?')) return;
+    localStorage.removeItem(saveKeyRef.current);
+    emu.flash.data.fill(0xFF);
+    append('cleared save');
   };
 
   return (
@@ -129,7 +206,15 @@ export function App() {
         </select>
         <button onClick={() => setPaused((p) => !p)}>{paused ? 'Resume' : 'Pause'}</button>
         <button onClick={onReset}>Reset</button>
-        <span style={{ opacity: 0.5 }}>keys: arrows · z/x · a/s · enter/shift</span>
+        <button onClick={onDownloadSave}>Export .sav</button>
+        <label className="upload-btn">
+          Import .sav
+          <input type="file" accept=".sav,.bin" onChange={onUploadSave} style={{ display: 'none' }} />
+        </label>
+        <button onClick={onClearSave}>Clear Save</button>
+      </div>
+      <div className="row">
+        <span style={{ opacity: 0.5 }}>keys: arrows · z/x · a/s · enter/shift · saves auto-persist to browser storage</span>
       </div>
       <LogPane lines={log} />
     </>

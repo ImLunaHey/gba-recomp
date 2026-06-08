@@ -31,6 +31,17 @@ export class Flash128K implements SaveBridge {
   static readonly ID_MAKER = 0xC2;
   static readonly ID_DEVICE = 0x09;
 
+  // Called whenever the chip data changes; the host wires this to persist
+  // to localStorage / IndexedDB.
+  onChange: (() => void) | null = null;
+
+  // Load save data from a serialized 128 KB buffer (or shorter — padded
+  // with 0xFF). Used to restore the game's save on page load.
+  loadSave(bytes: Uint8Array): void {
+    this.data.fill(0xFF);
+    this.data.set(bytes.subarray(0, Math.min(bytes.length, this.data.length)));
+  }
+
   read(addr: number): number {
     addr &= 0xFFFF;
     if (this.idMode) {
@@ -47,6 +58,7 @@ export class Flash128K implements SaveBridge {
       case FlashCmd.Program:
         this.data[(this.bank << 16) | addr] = v;
         this.state = FlashCmd.Normal;
+        if (this.onChange) this.onChange();
         return;
 
       case FlashCmd.BankSelect:
@@ -59,6 +71,7 @@ export class Flash128K implements SaveBridge {
           const base = (this.bank << 16) | (addr & 0xF000);
           this.data.fill(0xFF, base, base + 0x1000);
           this.state = FlashCmd.Normal;
+          if (this.onChange) this.onChange();
           return;
         }
         this.state = FlashCmd.Normal;
@@ -76,12 +89,16 @@ export class Flash128K implements SaveBridge {
     }
     if (this.state === FlashCmd.AwaitSecond && addr === 0x5555) {
       switch (v) {
-        case 0x90: this.idMode = true; this.state = FlashCmd.Normal; return;     // enter ID
-        case 0xF0: this.idMode = false; this.state = FlashCmd.Normal; return;    // exit ID
-        case 0x80: this.state = FlashCmd.EraseAwaitFirst; return;                // erase prefix
-        case 0xA0: this.state = FlashCmd.Program; return;                        // byte program
-        case 0xB0: this.state = FlashCmd.BankSelect; return;                     // bank switch
-        case 0x10: this.data.fill(0xFF); this.state = FlashCmd.Normal; return;   // chip erase
+        case 0x90: this.idMode = true; this.state = FlashCmd.Normal; return;
+        case 0xF0: this.idMode = false; this.state = FlashCmd.Normal; return;
+        case 0x80: this.state = FlashCmd.EraseAwaitFirst; return;
+        case 0xA0: this.state = FlashCmd.Program; return;
+        case 0xB0: this.state = FlashCmd.BankSelect; return;
+        case 0x10:
+          this.data.fill(0xFF);
+          this.state = FlashCmd.Normal;
+          if (this.onChange) this.onChange();
+          return;
       }
     }
     if (this.state === FlashCmd.EraseAwaitFirst && addr === 0x5555 && v === 0xAA) {
