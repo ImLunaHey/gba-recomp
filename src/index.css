@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+/* Tokens carried forward from the original UI so dark mode / colors
+   stay consistent. Component classes that are reused several places
+   are kept as @apply blocks; one-off styling lives inline. */
+@theme {
+  --color-bg: #0a0a0c;
+  --color-fg: #e7e7ea;
+  --color-card: #1c1c22;
+  --color-card-hover: #24242a;
+  --color-border: #2a2a30;
+  --color-muted: #9a9aa6;
+  --color-accent: #9be7ff;
+}
+
+:root { color-scheme: dark; }
+html, body { @apply m-0 p-0 h-full; background: var(--color-bg); color: var(--color-fg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+body { @apply flex flex-col items-center gap-3 p-4; }
+
+/* GBA framebuffer canvas — pixelated at 3x scale. */
+canvas#screen {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  width: 720px;
+  height: 480px;
+  background: #000;
+  border: 1px solid #1c1c20;
+  box-shadow: 0 0 60px rgba(0, 0, 0, 0.7);
+}
+
+/* On-screen gamepad button — base + variants. */
+.gp-btn {
+  width: 36px; height: 36px; padding: 0;
+  font-size: 13px; font-weight: bold;
+  user-select: none; touch-action: none;
+  background: var(--color-card); color: var(--color-fg);
+  border: 1px solid var(--color-border); border-radius: 4px;
+  cursor: pointer;
+  transition: background 50ms, border-color 50ms, color 50ms;
+}
+.gp-btn.pressed { background: #3a3a5a; border-color: #5060a0; color: #fff; }
+.gp-btn.dpad-mid { background: #14141a; cursor: default; }
+.gp-shoulder { width: 64px; }
+.gp-pill { width: 64px; height: 22px; border-radius: 11px; font-size: 9px; letter-spacing: 0.1em; }
+.gp-ab { width: 48px; height: 48px; border-radius: 24px; font-size: 18px; }
+.gp-a { background: #5a3030; border-color: #804040; }
+.gp-a.pressed { background: #aa4040; border-color: #d05050; }
+.gp-b { background: #305a30; border-color: #408040; }
+.gp-b.pressed { background: #40aa40; border-color: #50d050; }
+
+/* Layout helpers reused across screens. */
+.btn-default {
+  background: var(--color-card);
+  color: var(--color-fg);
+  border: 1px solid var(--color-border);
+  padding: 6px 12px;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 100ms;
+}
+.btn-default:hover:not(:disabled) { background: var(--color-card-hover); }
+.btn-default:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* GBA gamepad grid. */
+.gamepad {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-rows: auto auto;
+  grid-template-areas:
+    "dpad mid ab"
+    "shoulder mid ab";
+  gap: 8px;
+  width: 720px;
+  align-items: center;
+  padding: 8px 0;
+}
+.gamepad .dpad { grid-area: dpad; display: grid; grid-template-rows: auto auto auto; justify-items: center; gap: 2px; }
+.gamepad .dpad-row { display: flex; gap: 2px; }
+.gamepad .shoulder { grid-area: shoulder; display: flex; gap: 8px; }
+.gamepad .middle { grid-area: mid; display: flex; gap: 8px; justify-content: center; }
+.gamepad .ab { grid-area: ab; display: flex; gap: 12px; align-items: flex-end; }

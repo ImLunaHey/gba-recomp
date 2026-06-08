@@ -4,63 +4,6 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>gba-recomp</title>
-    <style>
-      :root { color-scheme: dark; }
-      html, body { margin: 0; padding: 0; background: #0a0a0c; color: #e7e7ea; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; height: 100%; }
-      body { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; }
-      header { width: 100%; max-width: 720px; display: flex; justify-content: space-between; align-items: baseline; }
-      header h1 { font-size: 14px; margin: 0; letter-spacing: 0.04em; opacity: 0.8; }
-      header .stats { font-size: 11px; opacity: 0.6; }
-      canvas { image-rendering: pixelated; image-rendering: crisp-edges; background: #000; border: 1px solid #1c1c20; width: 720px; height: 480px; box-shadow: 0 0 60px rgba(0,0,0,0.7); }
-      .stats-bar { width: 720px; padding: 4px 8px; font-size: 11px; color: #9be7ff; opacity: 0.85; text-align: left; }
-      .row { display: flex; gap: 12px; font-size: 11px; opacity: 0.7; align-items: center; width: 720px; }
-      .log { width: 720px; height: 120px; overflow: auto; background: #0e0e12; border: 1px solid #1c1c20; padding: 8px; font-size: 11px; color: #9a9aa6; white-space: pre-wrap; }
-      button { background: #1c1c22; color: #d8d8e0; border: 1px solid #2a2a30; padding: 6px 12px; font-family: inherit; font-size: 11px; cursor: pointer; border-radius: 4px; }
-      button:hover { background: #24242a; }
-      .upload-btn { background: #1c1c22; color: #d8d8e0; border: 1px solid #2a2a30; padding: 6px 12px; font-family: inherit; font-size: 11px; cursor: pointer; border-radius: 4px; user-select: none; }
-      .upload-btn:hover { background: #24242a; }
-      select { background: #1c1c22; color: #d8d8e0; border: 1px solid #2a2a30; padding: 6px; font-family: inherit; font-size: 11px; border-radius: 4px; }
-      .gamepad { display: grid; grid-template-columns: auto 1fr auto; grid-template-rows: auto auto; grid-template-areas: "dpad mid ab" "shoulder mid ab"; gap: 8px; width: 720px; align-items: center; padding: 8px 0; }
-      .gamepad .dpad { grid-area: dpad; display: grid; grid-template-rows: auto auto auto; justify-items: center; gap: 2px; }
-      .gamepad .dpad-row { display: flex; gap: 2px; }
-      .gamepad .shoulder { grid-area: shoulder; display: flex; gap: 8px; }
-      .gamepad .middle { grid-area: mid; display: flex; gap: 8px; justify-content: center; }
-      .gamepad .ab { grid-area: ab; display: flex; gap: 12px; align-items: flex-end; }
-      .gp-btn { width: 36px; height: 36px; padding: 0; font-size: 13px; font-weight: bold; user-select: none; touch-action: none; }
-      .gp-btn.pressed { background: #3a3a5a; border-color: #5060a0; color: #fff; }
-      .gp-btn.dpad-mid { background: #14141a; border-color: #2a2a30; cursor: default; }
-      .gp-shoulder { width: 64px; }
-      .gp-pill { width: 64px; height: 22px; border-radius: 11px; font-size: 9px; letter-spacing: 0.1em; }
-      .gp-ab { width: 48px; height: 48px; border-radius: 24px; font-size: 18px; }
-      .gp-a { background: #5a3030; border-color: #804040; }
-      .gp-a.pressed { background: #aa4040; border-color: #d05050; }
-      .gp-b { background: #305a30; border-color: #408040; }
-      .gp-b.pressed { background: #40aa40; border-color: #50d050; }
-      .cp-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-      .cp-panel { background: #14141a; border: 1px solid #2a2a30; border-radius: 8px; padding: 16px; min-width: 540px; max-width: 720px; max-height: 80vh; overflow-y: auto; box-shadow: 0 16px 60px rgba(0,0,0,0.5); }
-      .cp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid #2a2a30; padding-bottom: 8px; }
-      .cp-title { font-size: 13px; font-weight: bold; letter-spacing: 0.06em; }
-      .cp-close { background: none; border: none; color: #d8d8e0; font-size: 18px; cursor: pointer; padding: 0 6px; }
-      .cp-close:hover { color: #fff; }
-      .cp-empty { padding: 32px; text-align: center; opacity: 0.6; font-size: 12px; line-height: 1.6; }
-      .cp-meta { font-size: 11px; opacity: 0.7; margin-bottom: 12px; line-height: 1.5; }
-      .cp-meta b { color: #9be7ff; font-weight: normal; margin-right: 4px; }
-      .cp-section { margin: 12px 0; }
-      .cp-section-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; opacity: 0.5; margin-bottom: 6px; }
-      .cp-buttons { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; }
-      .cp-btn { background: #1c1c22; border: 1px solid #2a2a30; border-radius: 4px; padding: 8px 4px; text-align: center; font-size: 11px; transition: background 50ms, border-color 50ms; position: relative; }
-      .cp-btn.lit { background: #4a8aff; border-color: #6ea2ff; color: #fff; box-shadow: 0 0 8px rgba(74,138,255,0.5); }
-      .cp-btn-idx { font-weight: bold; }
-      .cp-btn-val { font-size: 9px; opacity: 0.7; }
-      .cp-axes { display: flex; flex-direction: column; gap: 6px; }
-      .cp-axis { display: grid; grid-template-columns: 24px 1fr 48px; gap: 8px; align-items: center; font-size: 11px; }
-      .cp-axis-label { opacity: 0.5; text-align: right; }
-      .cp-axis-bar { position: relative; height: 8px; background: #1c1c22; border: 1px solid #2a2a30; border-radius: 4px; overflow: hidden; }
-      .cp-axis-bar::before { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: #2a2a30; }
-      .cp-axis-fill { position: absolute; top: 0; bottom: 0; min-width: 1px; }
-      .cp-axis-val { opacity: 0.7; font-family: ui-monospace; }
-      .cp-hint { margin-top: 16px; padding-top: 12px; border-top: 1px solid #2a2a30; font-size: 10px; opacity: 0.5; line-height: 1.5; }
-    </style>
   </head>
   <body>
     <div id="root"></div>

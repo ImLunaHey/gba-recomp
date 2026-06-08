@@ -7,16 +7,9 @@ import { LogPane } from './LogPane';
 import { useGamepad } from './useGamepad';
 import { useKeypadHighlight } from './useKeypadHighlight';
 import { ControllerPanel } from './ControllerPanel';
+import { RomLibrary } from './RomLibrary';
+import { getRomBytes, getSelectedRom, setSelectedRom, type RomMeta } from './romStore';
 
-const ROMS = [
-  { value: '/firered.gba',  label: 'Pokemon FireRed' },
-  { value: '/emerald.gba',  label: 'Pokemon Emerald' },
-  { value: '/ruby.gba',     label: 'Pokemon Ruby' },
-  { value: '/garfield.gba', label: 'Garfield: Search for Pooky' },
-  { value: '/crash.gba',    label: 'Crash Bandicoot' },
-];
-
-// Base64 helpers for stashing the 128 KB Flash buffer in localStorage.
 function bytesToBase64(bytes: Uint8Array): string {
   let bin = '';
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
@@ -44,12 +37,15 @@ export function App() {
   if (!emuRef.current) emuRef.current = new Emulator();
   const emu = emuRef.current;
 
-  const [romPath, setRomPath] = useState(ROMS[0].value);
   const [paused, setPaused] = useState(false);
   const [stats, setStats] = useState('— fps · — Mhz');
-  const [log, setLog] = useState<string[]>(['booting GBA WASM recompiler…']);
+  const [log, setLog] = useState<string[]>(['gba-recomp — pick a ROM to start']);
   const [headerInfo, setHeaderInfo] = useState<string>('');
+  const [showCp, setShowCp] = useState(false);
+  const [showLib, setShowLib] = useState(false);
+  const [currentRom, setCurrentRom] = useState<RomMeta | null>(null);
   const romBufRef = useRef<Uint8Array | null>(null);
+  const saveKeyRef = useRef<string>('');
 
   const append = (...args: unknown[]) => setLog((prev) => [...prev, args.map(String).join(' ')]);
 
@@ -60,55 +56,51 @@ export function App() {
   });
   useKeypadHighlight(emu.keypad);
 
-  const [showCp, setShowCp] = useState(false);
-
-  // RTC GPIO interposer is now installed inside Emulator.constructor()
-  // so it's always active (was previously here in useMemo, which meant
-  // headless boot bypassed the RTC entirely).
-  const saveKeyRef = useRef<string>('');
-
-  // ROM load + per-ROM Flash persistence wiring.
-  useEffect(() => {
-    let cancelled = false;
-    append(`fetching ${romPath}…`);
-    fetch(romPath).then((r) => r.arrayBuffer()).then((buf) => {
-      if (cancelled) return;
-      const bytes = new Uint8Array(buf);
-      romBufRef.current = bytes;
-      const title = new TextDecoder('ascii').decode(bytes.subarray(0xA0, 0xAC)).replace(/\0/g, '');
-      const code = new TextDecoder('ascii').decode(bytes.subarray(0xAC, 0xB0));
-      const saveKey = `gba-recomp:save:${code}`;
-      saveKeyRef.current = saveKey;
-      append(`loaded ${bytes.length} bytes — "${title}" (${code})`);
-      setHeaderInfo(`${title} · ${code}`);
-      emu.loadRom(bytes);
-      // Restore in-game save from localStorage if present.
-      try {
-        const raw = localStorage.getItem(saveKey);
-        if (raw) {
-          const arr = base64ToBytes(raw);
-          emu.flash.loadSave(arr);
-          append(`restored save (${arr.length} bytes)`);
-        }
-      } catch (e) {
-        append('save restore failed:', (e as Error).message);
+  // Boot a ROM by id (= IndexedDB key).
+  const loadRomById = async (id: string, meta?: RomMeta) => {
+    const bytes = await getRomBytes(id);
+    if (!bytes) { append(`no ROM stored for "${id}"`); return; }
+    romBufRef.current = bytes;
+    const title = new TextDecoder('ascii').decode(bytes.subarray(0xA0, 0xAC)).replace(/\0/g, '');
+    const code = new TextDecoder('ascii').decode(bytes.subarray(0xAC, 0xB0));
+    const saveKey = `gba-recomp:save:${code}`;
+    saveKeyRef.current = saveKey;
+    setHeaderInfo(`${title.trim()} · ${code}`);
+    setCurrentRom(meta ?? { id, filename: title, title, code, size: bytes.length, addedAt: 0 });
+    emu.loadRom(bytes);
+    try {
+      const raw = localStorage.getItem(saveKey);
+      if (raw) {
+        const arr = base64ToBytes(raw);
+        emu.flash.loadSave(arr);
+        append(`restored save (${arr.length} bytes)`);
       }
-      // Auto-persist on Flash writes (debounced).
-      let writeTimer: number | null = null;
-      emu.flash.onChange = () => {
-        if (writeTimer !== null) return;
-        writeTimer = window.setTimeout(() => {
-          writeTimer = null;
-          try {
-            localStorage.setItem(saveKey, bytesToBase64(emu.flash.data));
-          } catch (e) {
-            console.warn('Flash persist failed', e);
-          }
-        }, 250);
-      };
-    });
-    return () => { cancelled = true; };
-  }, [romPath, emu]);
+    } catch (e) {
+      append('save restore failed:', (e as Error).message);
+    }
+    setSelectedRom(id);
+    append(`loaded "${title.trim() || code}"`);
+    let writeTimer: number | null = null;
+    emu.flash.onChange = () => {
+      if (writeTimer !== null) return;
+      writeTimer = window.setTimeout(() => {
+        writeTimer = null;
+        try {
+          localStorage.setItem(saveKey, bytesToBase64(emu.flash.data));
+        } catch (e) {
+          console.warn('Flash persist failed', e);
+        }
+      }, 250);
+    };
+  };
+
+  // On first mount, auto-load the previously selected ROM if any.
+  useEffect(() => {
+    const id = getSelectedRom();
+    if (id) loadRomById(id);
+    else setShowLib(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Keyboard bindings.
   useEffect(() => {
@@ -132,7 +124,6 @@ export function App() {
     if (!romBufRef.current) return;
     append('reset');
     emu.loadRom(romBufRef.current);
-    // Re-restore save after the reset wiped Flash.
     try {
       const raw = localStorage.getItem(saveKeyRef.current);
       if (raw) emu.flash.loadSave(base64ToBytes(raw));
@@ -144,12 +135,11 @@ export function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${headerInfo.split(' · ')[1] || 'gba'}.sav`;
+    a.download = `${currentRom?.code || 'gba'}.sav`;
     a.click();
     URL.revokeObjectURL(url);
     append('downloaded .sav file');
   };
-
   const onUploadSave = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -162,7 +152,6 @@ export function App() {
     });
     e.target.value = '';
   };
-
   const onClearSave = () => {
     if (!confirm('Delete the saved game data for this ROM?')) return;
     localStorage.removeItem(saveKeyRef.current);
@@ -172,32 +161,37 @@ export function App() {
 
   return (
     <>
-      <header>
-        <h1>GBA-RECOMP · Hybrid WASM</h1>
-        <div className="stats">{headerInfo || '—'}</div>
+      <header className="w-full max-w-[720px] flex justify-between items-baseline">
+        <h1 className="text-sm m-0 tracking-wide opacity-80">GBA-RECOMP · Hybrid WASM</h1>
+        <div className="text-xs opacity-60">{headerInfo || 'no ROM loaded'}</div>
       </header>
       <Screen emu={emu} paused={paused} onStats={setStats} />
-      <div className="stats-bar">{stats}</div>
+      <div className="w-[720px] px-2 py-1 text-xs text-[var(--color-accent)] opacity-85 text-left">{stats}</div>
       <Gamepad keypad={emu.keypad} />
-      <div className="row">
-        <select value={romPath} onChange={(e) => setRomPath(e.target.value)}>
-          {ROMS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-        </select>
-        <button onClick={() => setPaused((p) => !p)}>{paused ? 'Resume' : 'Pause'}</button>
-        <button onClick={onReset}>Reset</button>
-        <button onClick={onDownloadSave}>Export .sav</button>
-        <label className="upload-btn">
+      <div className="flex gap-3 text-xs opacity-90 items-center w-[720px] flex-wrap">
+        <button onClick={() => setShowLib(true)} className="btn-default">ROM Library…</button>
+        <button onClick={() => setPaused((p) => !p)} className="btn-default" disabled={!currentRom}>{paused ? 'Resume' : 'Pause'}</button>
+        <button onClick={onReset} className="btn-default" disabled={!currentRom}>Reset</button>
+        <button onClick={onDownloadSave} className="btn-default" disabled={!currentRom}>Export .sav</button>
+        <label className={`btn-default cursor-pointer ${!currentRom ? 'opacity-50 pointer-events-none' : ''}`}>
           Import .sav
-          <input type="file" accept=".sav,.bin" onChange={onUploadSave} style={{ display: 'none' }} />
+          <input type="file" accept=".sav,.bin" onChange={onUploadSave} className="hidden" />
         </label>
-        <button onClick={onClearSave}>Clear Save</button>
-        <button onClick={() => setShowCp(true)}>Controller…</button>
+        <button onClick={onClearSave} className="btn-default" disabled={!currentRom}>Clear Save</button>
+        <button onClick={() => setShowCp(true)} className="btn-default">Controller…</button>
       </div>
-      <div className="row">
-        <span style={{ opacity: 0.5 }}>keys: arrows · z/x · a/s · enter/shift · saves auto-persist to browser storage</span>
+      <div className="flex gap-3 text-xs opacity-70 items-center w-[720px]">
+        <span>keys: arrows · z/x · a/s · enter/shift · saves auto-persist to browser storage</span>
       </div>
-      <ControllerPanel open={showCp} onClose={() => setShowCp(false)} />
       <LogPane lines={log} />
+      <ControllerPanel open={showCp} onClose={() => setShowCp(false)} />
+      <RomLibrary
+        open={showLib}
+        currentId={currentRom?.id ?? null}
+        onClose={() => setShowLib(false)}
+        onSelect={(meta) => { setShowLib(false); loadRomById(meta.id, meta); }}
+        onAppend={append}
+      />
     </>
   );
 }
