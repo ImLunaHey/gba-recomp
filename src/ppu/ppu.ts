@@ -3,6 +3,7 @@ import { Irq, IRQ_VBLANK, IRQ_HBLANK, IRQ_VCOUNT } from '../io/irq';
 import { Dma } from '../io/dma';
 import { renderModeText } from './modes_text';
 import { renderModeBitmap3, renderModeBitmap4, renderModeBitmap5 } from './modes_bitmap';
+import { renderModeAffine } from './modes_affine';
 import { renderSprites } from './sprites';
 import { compositeScanline } from './composite';
 
@@ -176,12 +177,14 @@ export class Ppu {
       } else if (mode === 1) {
         if (this.dispcnt & 0x100) renderModeText(this, 0, y);
         if (this.dispcnt & 0x200) renderModeText(this, 1, y);
-        // BG2 affine — minimal: treat as text for now (FireRed mostly uses mode 0).
-        if (this.dispcnt & 0x400) renderModeText(this, 2, y);
+        // BG2 in mode 1 is AFFINE — different map layout (1 byte per
+        // tile index, no palette/flip bits), always 8bpp tile data, and
+        // sampled through the BGxPA..D matrix + reference point.
+        if (this.dispcnt & 0x400) renderModeAffine(this, 2, y);
       } else {
-        // Mode 2: BG2 and BG3 affine — treat as text fallback.
-        if (this.dispcnt & 0x400) renderModeText(this, 2, y);
-        if (this.dispcnt & 0x800) renderModeText(this, 3, y);
+        // Mode 2: BG2 and BG3 are both affine.
+        if (this.dispcnt & 0x400) renderModeAffine(this, 2, y);
+        if (this.dispcnt & 0x800) renderModeAffine(this, 3, y);
       }
     } else if (mode === 3) {
       if (this.dispcnt & 0x400) renderModeBitmap3(this, y);
