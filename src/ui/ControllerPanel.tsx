@@ -147,6 +147,16 @@ export function ControllerPanel({ open, onClose, onChange }: Props) {
   );
 }
 
+// HID single-axis hat decoder. Standard 8-position encoding:
+//   -1.00=U, -0.71=UR, -0.43=R, -0.14=DR, 0.14=D, 0.43=DL, 0.71=L, 1.00=UL
+// Idle sits out-of-range (|v|>1.05). Returns null when the axis is
+// either idle, missing, or doesn't look like a hat.
+function decodeHat(v: number | undefined): 'U' | 'D' | 'L' | 'R' | 'UR' | 'DR' | 'DL' | 'UL' | null {
+  if (typeof v !== 'number' || Math.abs(v) > 1.05) return null;
+  const pos = Math.round((v + 1) * 7 / 2);
+  return (['U', 'UR', 'R', 'DR', 'D', 'DL', 'L', 'UL'] as const)[pos] ?? null;
+}
+
 // Stylized PS5/Xbox-like layout. Buttons light up in their physical
 // positions when pressed, instead of a flat grid of numbered cells.
 function PadDiagram({ snap }: { snap: PadSnapshot }) {
@@ -154,15 +164,17 @@ function PadDiagram({ snap }: { snap: PadSnapshot }) {
   const map = (std: number, sony: number) => isStandard ? std : sony;
   const lit = (idx: number) => snap.buttons[idx];
 
-  // D-pad direction is detected from EITHER discrete buttons OR the HID
-  // hat axes 6/7. Many controllers (PS5 on macOS Safari most notably)
-  // skip the discrete-button form entirely and only emit the hat axes.
+  // D-pad direction is detected from THREE possible encodings:
+  //   - discrete buttons (standard / sony) at the canonical indices
+  //   - two-axis hat at axes 6/7 (X then Y)
+  //   - single-axis HID hat at axis 4 or 9 (PS5 on Safari most notably)
   const hx = snap.axes[6] ?? 0;
   const hy = snap.axes[7] ?? 0;
-  const dUp    = lit(map(12, 14)) || hy < -0.5;
-  const dDown  = lit(map(13, 15)) || hy >  0.5;
-  const dLeft  = lit(map(14, 16)) || hx < -0.5;
-  const dRight = lit(map(15, 17)) || hx >  0.5;
+  const hatPos = decodeHat(snap.axes[4]) ?? decodeHat(snap.axes[9]);
+  const dUp    = lit(map(12, 14)) || hy < -0.5 || hatPos === 'U' || hatPos === 'UR' || hatPos === 'UL';
+  const dDown  = lit(map(13, 15)) || hy >  0.5 || hatPos === 'D' || hatPos === 'DR' || hatPos === 'DL';
+  const dLeft  = lit(map(14, 16)) || hx < -0.5 || hatPos === 'L' || hatPos === 'UL' || hatPos === 'DL';
+  const dRight = lit(map(15, 17)) || hx >  0.5 || hatPos === 'R' || hatPos === 'UR' || hatPos === 'DR';
 
   // Stick deflection (for visualization).
   const ax = snap.axes[0] ?? 0;
@@ -369,16 +381,17 @@ function BindingTable({
         {GBA_KEYS.map(({ key, name }) => {
           const buttonIdx = bindings[key];
           const isEditing = editingKey === key;
-          // D-pad rows also light up from the hat-axis fallback so the
-          // user can see that direction is reaching the browser even
-          // when the controller doesn't expose discrete D-pad buttons.
+          // D-pad rows also light up from the two-axis hat (6/7) or the
+          // single-axis HID hat (4 / 9) when the controller routes D-pad
+          // through axes instead of discrete buttons.
           const hx = snap.axes[6] ?? 0;
           const hy = snap.axes[7] ?? 0;
+          const hatPos = decodeHat(snap.axes[4]) ?? decodeHat(snap.axes[9]);
           const axisLit =
-            (name === 'D-pad Up'    && hy < -0.5) ||
-            (name === 'D-pad Down'  && hy >  0.5) ||
-            (name === 'D-pad Left'  && hx < -0.5) ||
-            (name === 'D-pad Right' && hx >  0.5);
+            (name === 'D-pad Up'    && (hy < -0.5 || hatPos === 'U' || hatPos === 'UR' || hatPos === 'UL')) ||
+            (name === 'D-pad Down'  && (hy >  0.5 || hatPos === 'D' || hatPos === 'DR' || hatPos === 'DL')) ||
+            (name === 'D-pad Left'  && (hx < -0.5 || hatPos === 'L' || hatPos === 'UL' || hatPos === 'DL')) ||
+            (name === 'D-pad Right' && (hx >  0.5 || hatPos === 'R' || hatPos === 'UR' || hatPos === 'DR'));
           const isLit = (buttonIdx !== undefined && snap.buttons[buttonIdx]) || axisLit;
           return (
             <button
