@@ -461,6 +461,74 @@ describe('Halt + IRQ wakeup (the boot stall pattern)', () => {
   });
 });
 
+describe('BIOS IRQ dispatcher round-trip', () => {
+  it('BIOS branch at 0x18 reaches dispatcher at 0x128', () => {
+    const { cpu, bus } = setupRunArm([]);
+    // Read the branch instruction the reset() installed at 0x18.
+    const insn = bus.read32(0x18);
+    expect(insn).toBe(0xEA000042);  // B 0x128
+    // Verify by manual decode.
+    const cond = insn >>> 28;
+    expect(cond).toBe(0xE);
+    const off = (insn & 0x00FFFFFF) << 2;
+    const target = (0x18 + 8 + off) >>> 0;
+    expect(target).toBe(0x128);
+  });
+
+  it('Dispatcher at 0x128 starts with STMFD SP!, {R0-R3, R12, LR}', () => {
+    const { bus } = setupRunArm([]);
+    expect(bus.read32(0x128)).toBe(0xE92D500F);
+  });
+
+  it('Dispatcher fully executes IRQ → user handler → return', () => {
+    const { cpu, bus } = setupRunArm([]);
+    // Plant a minimal user IRQ handler at IWRAM 0x03002000 that:
+    //   1. Acks IF.VBlank (write 1 to 0x4000202)
+    //   2. BX LR (return to dispatcher's continuation at 0x138)
+    // ARM: MOV R0, #1; MOV R1, #0x4000000; ADD R1, R1, #0x202; STRH R0, [R1]; BX LR
+    // Use simpler: MOV R0, #1; LDR R1, [PC]; STRH R0, [R1]; BX LR; .word 0x4000202
+    bus.write32(0x03002000, 0xE3A00001);  // MOV R0, #1
+    bus.write32(0x03002004, 0xE59F1004);  // LDR R1, [PC, #4] → loads from 0x03002010
+    bus.write32(0x03002008, 0xE1C100B0);  // STRH R0, [R1] (P=1,U=1,W=0,L=0,Rn=1,Rd=0,offset=0,H=1)
+    bus.write32(0x0300200C, 0xE12FFF1E);  // BX LR
+    bus.write32(0x03002010, 0x04000202);  // literal
+    // Install pointer to handler at the canonical IWRAM IRQ vector slot.
+    bus.write32(0x03007FFC, 0x03002000);
+    // Set up CPU + IRQ state.
+    cpu.state.cpsr = Mode.SYS;
+    cpu.state.r[15] = 0x08000100;  // pretend we're in game code at 0x08000100
+    const irq = (bus.io as any).irq;
+    irq.ime = 1;
+    irq.ie = 0x0001;
+    irq.iflag = 0x0001;
+    cpu.irqLine = true;
+    // Step CPU until we return to user code. Should take ~10-15 instructions:
+    // takeIrq+B(0x128) → STMFD → MOV → ADR → LDR PC → MOV/LDR/STRH/BX LR
+    // (in handler) → LDMFD → SUBS PC, LR, #4
+    let saw_handler = false, saw_subs = false, saw_return = false;
+    let took_irq = false;
+    for (let i = 0; i < 30; i++) {
+      cpu.irqLine = irq.pending();
+      const pcBefore = cpu.state.r[15] >>> 0;
+      if (pcBefore === 0x03002000) saw_handler = true;
+      if (pcBefore === 0x13C) saw_subs = true;
+      if (cpu.state.mode() === Mode.IRQ) took_irq = true;
+      // Wait for return: in SYS mode AND back at original PC.
+      if (took_irq && cpu.state.mode() === Mode.SYS && pcBefore === 0x08000100) {
+        saw_return = true; break;
+      }
+      cpu.step();
+    }
+    expect(saw_handler).toBe(true);
+    expect(saw_subs).toBe(true);
+    expect(saw_return).toBe(true);
+    // After return, IF.VBlank should have been acked by the handler.
+    expect(irq.iflag & 0x0001).toBe(0);
+    // CPU mode should be back to SYS.
+    expect(cpu.state.mode()).toBe(Mode.SYS);
+  });
+});
+
 describe('Memory mirrors and rotations', () => {
   it('IWRAM mirrors every 32 KB', () => {
     const { bus } = setupRunArm([]);
