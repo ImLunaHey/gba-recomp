@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Emulator } from '../emulator';
 import { SignalTransport } from '../io/sio-signal';
 import { LocalLoopback } from '../io/sio';
@@ -242,6 +242,97 @@ function LinkDebug({ emu }: { emu: Emulator }) {
         <div>{snap.master ? 'master' : 'slave'}</div>
       </div>
       <SioTracer emu={emu} />
+      <IwramWatch emu={emu} />
+    </div>
+  );
+}
+
+// Watch one specific IWRAM address (8/16/32-bit writes). Used to track
+// down the game-internal state byte that Mario Kart's cable detection
+// gates on (IWRAM 0x03002af1 — see disassembly of 0x8011ef0). User
+// enters a hex address, ticks the box, plays through cable detection,
+// then dumps the captured writes to console with the PC + value of
+// each one. Writes are logged ad-hoc into a window-scoped buffer so
+// the patch doesn't have to grow the bus type. Toggling off removes
+// the patch and clears the buffer.
+function IwramWatch({ emu }: { emu: Emulator }) {
+  const [on, setOn] = useState(false);
+  const [addrHex, setAddrHex] = useState('03002af1');
+  // We keep the buffer in a ref so dumping doesn't re-render the
+  // panel and risk losing entries.
+  const bufRef = useRef<{ pc: number; addr: number; size: number; val: number; n: number }[]>([]);
+  const detachRef = useRef<(() => void) | null>(null);
+
+  const attach = (watchAddr: number) => {
+    const bus = emu.bus;
+    const cpu = emu.cpu;
+    const inRange = (a: number, size: number) => {
+      const lo = watchAddr;
+      const hi = watchAddr + 1;
+      const aLo = a >>> 0;
+      const aHi = (a >>> 0) + size - 1;
+      return aHi >= lo && aLo <= hi;
+    };
+    const log = (pc: number, addr: number, size: number, val: number) => {
+      const last = bufRef.current[bufRef.current.length - 1];
+      if (last && last.pc === pc && last.addr === addr && last.size === size && last.val === val) {
+        last.n++; return;
+      }
+      bufRef.current.push({ pc, addr, size, val, n: 1 });
+      if (bufRef.current.length > 4096) bufRef.current.shift();
+    };
+    const orig8 = bus.write8.bind(bus);
+    const orig16 = bus.write16.bind(bus);
+    const orig32 = bus.write32.bind(bus);
+    bus.write8 = (a, v) => { if (inRange(a, 1)) log(cpu.state.r[15], a, 1, v & 0xFF); orig8(a, v); };
+    bus.write16 = (a, v) => { if (inRange(a, 2)) log(cpu.state.r[15], a, 2, v & 0xFFFF); orig16(a, v); };
+    bus.write32 = (a, v) => { if (inRange(a, 4)) log(cpu.state.r[15], a, 4, v >>> 0); orig32(a, v); };
+    detachRef.current = () => { bus.write8 = orig8; bus.write16 = orig16; bus.write32 = orig32; };
+  };
+
+  const toggle = () => {
+    if (on) {
+      detachRef.current?.();
+      detachRef.current = null;
+      bufRef.current.length = 0;
+      setOn(false);
+    } else {
+      const addr = parseInt(addrHex.trim().replace(/^0x/, ''), 16) >>> 0;
+      if (!Number.isFinite(addr)) return;
+      attach(addr);
+      setOn(true);
+    }
+  };
+
+  const dump = () => {
+    const rows = bufRef.current.map((e) => ({
+      pc: '0x' + (e.pc >>> 0).toString(16),
+      addr: '0x' + e.addr.toString(16).padStart(8, '0'),
+      size: e.size,
+      val: '0x' + e.val.toString(16),
+      n: e.n,
+    }));
+    if (rows.length === 0) {
+      console.log('[iwram-watch] no writes captured at 0x' + addrHex);
+      return;
+    }
+    console.log(`[iwram-watch] ${rows.length} unique writes at 0x${addrHex}`);
+    console.table(rows);
+  };
+
+  return (
+    <div className="flex gap-2 items-center text-[10px] mt-1 flex-wrap">
+      <label className="flex items-center gap-1 cursor-pointer">
+        <input type="checkbox" checked={on} onChange={toggle} className="w-3 h-3" />
+        <span className="opacity-60">IWRAM watch 0x</span>
+      </label>
+      <input
+        value={addrHex}
+        onChange={(e) => setAddrHex(e.target.value)}
+        disabled={on}
+        className="w-20 px-1 py-0 bg-[#1c1c22] border border-[#2a2a30] rounded text-[10px] font-mono"
+      />
+      <button onClick={dump} className="btn-default !text-[10px] !py-0.5">Dump</button>
     </div>
   );
 }
