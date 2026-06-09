@@ -87,7 +87,11 @@ export interface HasheousMeta {
     const stale: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && (k.startsWith('gba-recomp:hasheous:') || k.startsWith('gba-recomp:cover:'))) stale.push(k);
+      if (k && (
+        k.startsWith('gba-recomp:hasheous:') ||
+        k.startsWith('gba-recomp:cover:') ||
+        k === 'gba-recomp:rq:v1'
+      )) stale.push(k);
     }
     for (const k of stale) localStorage.removeItem(k);
     for (let i = 0; i < sessionStorage.length; i++) {

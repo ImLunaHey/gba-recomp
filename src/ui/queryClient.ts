@@ -17,10 +17,11 @@ export const queryClient = new QueryClient({
 });
 
 // Persist the cache to localStorage so reloads don't re-fetch
-// already-known metadata. The persister uses a single key so we can
-// invalidate the whole thing by bumping `buster`.
+// already-known metadata. Bump the version suffix when the shape of
+// any cached value changes — old entries under prior keys are then
+// orphans, swept by the cleanup pass in hasheous.ts.
 export const persister = createSyncStoragePersister({
   storage: typeof localStorage === 'undefined' ? undefined : localStorage,
-  key: 'gba-recomp:rq:v1',
+  key: 'gba-recomp:rq:v2',
   throttleTime: 1000,
 });
