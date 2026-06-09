@@ -12,10 +12,9 @@ export default defineConfig({
   plugins: [react(), tailwindcss(), ...(isTest ? [] : [cloudflare()])],
   server: {
     fs: { allow: ['..'] },
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
+    // No COOP / COEP — we don't use SharedArrayBuffer or atomics, and
+    // `require-corp` blocks cross-origin images (LibRetro thumbnails)
+    // since their server doesn't send Cross-Origin-Resource-Policy.
   },
   build: {
     target: 'esnext',

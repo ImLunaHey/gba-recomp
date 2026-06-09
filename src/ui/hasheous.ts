@@ -75,7 +75,9 @@ export interface HasheousMeta {
   thumbnails: string[];
 }
 
-const KEY_PREFIX = 'gba-recomp:hasheous:';
+// Bump when HasheousMeta's shape changes — old cache entries from
+// previous schema (no `thumbnails` array, etc.) will be ignored.
+const KEY_PREFIX = 'gba-recomp:hasheous:v2:';
 
 function readCache(md5: string): HasheousMeta | null | undefined {
   try {
