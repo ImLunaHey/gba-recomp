@@ -257,18 +257,19 @@ function LinkDebug({ emu }: { emu: Emulator }) {
 // the patch and clears the buffer.
 function IwramWatch({ emu }: { emu: Emulator }) {
   const [on, setOn] = useState(false);
-  const [addrHex, setAddrHex] = useState('03002af1');
+  const [addrHex, setAddrHex] = useState('03002af0');
+  const [widthHex, setWidthHex] = useState('10');
   // We keep the buffer in a ref so dumping doesn't re-render the
   // panel and risk losing entries.
   const bufRef = useRef<{ pc: number; addr: number; size: number; val: number; n: number }[]>([]);
   const detachRef = useRef<(() => void) | null>(null);
 
-  const attach = (watchAddr: number) => {
+  const attach = (watchAddr: number, width: number) => {
     const bus = emu.bus;
     const cpu = emu.cpu;
+    const lo = watchAddr;
+    const hi = watchAddr + Math.max(1, width) - 1;
     const inRange = (a: number, size: number) => {
-      const lo = watchAddr;
-      const hi = watchAddr + 1;
       const aLo = a >>> 0;
       const aHi = (a >>> 0) + size - 1;
       return aHi >= lo && aLo <= hi;
@@ -298,8 +299,9 @@ function IwramWatch({ emu }: { emu: Emulator }) {
       setOn(false);
     } else {
       const addr = parseInt(addrHex.trim().replace(/^0x/, ''), 16) >>> 0;
-      if (!Number.isFinite(addr)) return;
-      attach(addr);
+      const width = Math.max(1, parseInt(widthHex.trim().replace(/^0x/, ''), 16) >>> 0);
+      if (!Number.isFinite(addr) || !Number.isFinite(width)) return;
+      attach(addr, width);
       setOn(true);
     }
   };
@@ -331,6 +333,13 @@ function IwramWatch({ emu }: { emu: Emulator }) {
         onChange={(e) => setAddrHex(e.target.value)}
         disabled={on}
         className="w-20 px-1 py-0 bg-[#1c1c22] border border-[#2a2a30] rounded text-[10px] font-mono"
+      />
+      <span className="opacity-60">+0x</span>
+      <input
+        value={widthHex}
+        onChange={(e) => setWidthHex(e.target.value)}
+        disabled={on}
+        className="w-10 px-1 py-0 bg-[#1c1c22] border border-[#2a2a30] rounded text-[10px] font-mono"
       />
       <button onClick={dump} className="btn-default !text-[10px] !py-0.5">Dump</button>
     </div>
