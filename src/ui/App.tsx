@@ -1,10 +1,12 @@
 import { useRef } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { Emulator } from '../emulator';
 import { AudioSink } from './audio';
 import { EmuContext } from './EmuContext';
 import { LibraryPage } from './LibraryPage';
 import { PlayerPage } from './PlayerPage';
+import { queryClient, persister } from './queryClient';
 
 // Routes:
 //   /              ROM library
@@ -22,14 +24,19 @@ export function App() {
   if (!audioRef.current) audioRef.current = new AudioSink();
 
   return (
-    <EmuContext.Provider value={{ emu: emuRef.current, audio: audioRef.current }}>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<LibraryPage />} />
-          <Route path="/play/:romId" element={<PlayerPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </BrowserRouter>
-    </EmuContext.Provider>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{ persister, maxAge: 7 * 24 * 60 * 60 * 1000 }}
+    >
+      <EmuContext.Provider value={{ emu: emuRef.current, audio: audioRef.current }}>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<LibraryPage />} />
+            <Route path="/play/:romId" element={<PlayerPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </BrowserRouter>
+      </EmuContext.Provider>
+    </PersistQueryClientProvider>
   );
 }

@@ -79,54 +79,33 @@ export interface HasheousMeta {
 // previous schema (no `thumbnails` array, etc.) will be ignored. We
 // sweep older versions out of storage at module load so they don't
 // occupy quota indefinitely.
-const KEY_PREFIX = 'gba-recomp:hasheous:v2:';
-sweepOldVersions('gba-recomp:hasheous:', KEY_PREFIX, localStorage);
-
-function sweepOldVersions(family: string, current: string, store: Storage): void {
+// Sweep any stale localStorage keys from the pre-TanStack era so they
+// don't sit forever in quota. The new caching layer lives in
+// queryClient.ts and persists under 'gba-recomp:rq:v1'.
+(() => {
   try {
     const stale: string[] = [];
-    for (let i = 0; i < store.length; i++) {
-      const k = store.key(i);
-      if (k && k.startsWith(family) && !k.startsWith(current)) stale.push(k);
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.startsWith('gba-recomp:hasheous:') || k.startsWith('gba-recomp:cover:'))) stale.push(k);
     }
-    for (const k of stale) store.removeItem(k);
+    for (const k of stale) localStorage.removeItem(k);
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i);
+      if (k && k.startsWith('gba-recomp:cover:')) sessionStorage.removeItem(k);
+    }
   } catch { /* private mode or storage disabled */ }
-}
-export const __sweepOldVersions = sweepOldVersions;
+})();
 
-function readCache(md5: string): HasheousMeta | null | undefined {
-  try {
-    const raw = localStorage.getItem(KEY_PREFIX + md5);
-    if (!raw) return undefined;
-    if (raw === 'null') return null;
-    return JSON.parse(raw) as HasheousMeta;
-  } catch {
-    return undefined;
-  }
-}
-function writeCache(md5: string, meta: HasheousMeta | null): void {
-  try {
-    localStorage.setItem(KEY_PREFIX + md5, meta === null ? 'null' : JSON.stringify(meta));
-  } catch { /* quota */ }
-}
-
+// Single network round-trip — no local caching anymore. The
+// queryClient in queryClient.ts handles in-memory + localStorage
+// persistence for everything that comes through useHasheousMeta.
 export async function lookupByMd5(md5: string): Promise<HasheousMeta | null> {
-  const cached = readCache(md5);
-  if (cached !== undefined) return cached;
-  try {
-    const r = await fetch(`/api/hasheous/lookup/byhash/md5/${md5}`);
-    if (r.status === 404) {
-      writeCache(md5, null);
-      return null;
-    }
-    if (!r.ok) return null;
-    const body = await r.json() as Record<string, unknown>;
-    const meta = parseHasheousBody(body);
-    writeCache(md5, meta);
-    return meta;
-  } catch {
-    return null;
-  }
+  const r = await fetch(`/api/hasheous/lookup/byhash/md5/${md5}`);
+  if (r.status === 404) return null;
+  if (!r.ok) return null;
+  const body = await r.json() as Record<string, unknown>;
+  return parseHasheousBody(body);
 }
 
 function parseHasheousBody(body: Record<string, unknown>): HasheousMeta {
@@ -135,7 +114,14 @@ function parseHasheousBody(body: Record<string, unknown>): HasheousMeta {
   const game = sig?.game as Record<string, unknown> | undefined;
   const attrs = body.attributes as Array<Record<string, unknown>> | undefined;
 
-  const name = (game?.name as string) ?? (body.name as string) ?? null;
+  // Prefer body.name (ASCII canonical) over signature.game.name when
+  // the latter has diacritics like "Pokémon" — LibRetro filenames are
+  // all plain ASCII and won't match the Unicode variant.
+  const rawName = (body.name as string) ?? (game?.name as string) ?? null;
+  // Strip combining diacritics. Hasheous sometimes returns "Pokémon"
+  // (Unicode) where LibRetro filenames are plain ASCII "Pokemon".
+  // ̀-ͯ is the Combining Diacritical Marks block.
+  const name = rawName ? rawName.normalize('NFD').replace(/[̀-ͯ]/g, '') : null;
   const platformName = (platform?.name as string) ?? null;
   const publisher = (game?.publisher as string) ?? (body.publisher as string) ?? null;
   const year = (game?.year as string) ?? null;
@@ -155,29 +141,32 @@ function parseHasheousBody(body: Record<string, unknown>): HasheousMeta {
   return { name, platform: platformName, publisher, year, region, description, thumbnails };
 }
 
-// Construct the URL candidates we'll try, in order, against the
-// LibRetro thumbnails CDN (free + public + no auth). LibRetro names
-// follow the No-Intro convention <Title> (<Regions>) [+ flags].png.
-// Hasheous gives us the canonical title and at least one region, so we
-// guess: name + region first, then name + USA, then name + Europe,
-// then name + World, then name alone.
+// Construct candidate URLs to try against the LibRetro thumbnails
+// CDN (public, no auth). LibRetro follows the No-Intro convention:
+// <Title> (<Region>) [(<Languages>)] [<Flags>].png. Hasheous gives us
+// the canonical title and usually a region, so we guess a generous
+// set of common variants — including European multi-language suffixes
+// like "(Europe) (En,Fr,De,Es,It)" that Garfield-style PAL releases use.
 function buildThumbnailUrls(name: string, platform: string, region: string | null): string[] {
   if (!platform.toLowerCase().includes('boy advance')) return [];
   const system = 'Nintendo - Game Boy Advance';
-  const enc = (s: string) =>
-    encodeURIComponent(s)
-      .replace(/%20/g, '%20')
-      .replace(/'/g, '%27');
   const base = `https://thumbnails.libretro.com/${encodeURIComponent(system)}/Named_Boxarts/`;
+  const enc = (s: string) => encodeURIComponent(s).replace(/'/g, '%27');
   const variants: string[] = [];
   const tryFile = (rom: string) => variants.push(base + enc(rom) + '.png');
   if (region) tryFile(`${name} (${region})`);
-  tryFile(`${name} (USA)`);
   tryFile(`${name} (USA, Europe)`);
+  tryFile(`${name} (USA)`);
+  tryFile(`${name} (USA) (En,Fr,De,Es,It)`);
+  tryFile(`${name} (USA) (En,Fr,Es)`);
   tryFile(`${name} (Europe)`);
+  tryFile(`${name} (Europe) (En,Fr,De,Es,It)`);
+  tryFile(`${name} (Europe) (En,Fr,De,It)`);
+  tryFile(`${name} (Europe) (En,Fr,De,Es,It,Nl)`);
+  tryFile(`${name} (Europe) (En,Es,It)`);
+  tryFile(`${name} (Europe) (En,Fr,De)`);
   tryFile(`${name} (World)`);
   tryFile(`${name} (Japan)`);
   tryFile(name);
-  // Dedupe while preserving order.
   return Array.from(new Set(variants));
 }

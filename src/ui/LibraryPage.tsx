@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { unzipSync } from 'fflate';
 import { ErrorBoundary } from './ErrorBoundary';
-import { addRom, deleteRom, getRomBytes, listRoms, updateRomMd5, type RomMeta } from './romStore';
-import { md5Hex, lookupByMd5, type HasheousMeta } from './hasheous';
+import { type RomMeta } from './romStore';
 import { useConfirm } from './ConfirmModal';
-import { CoverImage } from './CoverImage';
+import { CoverCard } from './CoverCard';
+import { useRomList } from './hooks/useRomList';
+import { useRomMutations } from './hooks/useRomMutations';
 
 // Pull every .gba member out of a ZIP archive.
 function extractGbaFromZip(zipBytes: Uint8Array): Array<{ filename: string; bytes: Uint8Array }> {
@@ -20,65 +21,20 @@ function extractGbaFromZip(zipBytes: Uint8Array): Array<{ filename: string; byte
   return out;
 }
 
-// / — full-page ROM library. Card grid with Hasheous metadata; click
-// a card to navigate to /play/:romId.
+// / — full-page ROM library. Card grid with Hasheous metadata + cover
+// art (LibRetro thumbnails). Click a card → /play/:romId.
 export function LibraryPage() {
   const navigate = useNavigate();
-  const [roms, setRoms] = useState<RomMeta[]>([]);
+  const { data: roms = [], isLoading } = useRomList();
+  const { add, remove } = useRomMutations();
+  const confirm = useConfirm();
+
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [log, setLog] = useState<string[]>([]);
-  // Hasheous lookup results, keyed by ROM id.
-  const [meta, setMeta] = useState<Record<string, HasheousMeta | null>>({});
-  const confirm = useConfirm();
-
   const append = (msg: string) => setLog((p) => [...p, msg]);
-
-  // "loading" while we're walking the library populating md5 + Hasheous
-  // metadata. Shown as a small status line above the grid.
-  const [enriching, setEnriching] = useState(0);
-
-  const refresh = async () => {
-    const r = await listRoms();
-    setRoms(r);
-    setSelected(new Set());
-    enrichAll(r);
-  };
-  // For each ROM in the library, ensure we have an md5 (backfilling
-  // by hashing the bytes if it was added pre-Hasheous-integration),
-  // then trigger a Hasheous lookup if we haven't already cached one.
-  const enrichAll = async (rs: RomMeta[]) => {
-    const todo = rs.filter((rom) => meta[rom.id] === undefined);
-    if (todo.length === 0) return;
-    setEnriching(todo.length);
-    for (const rom of todo) {
-      let md5 = rom.md5;
-      if (!md5) {
-        try {
-          const bytes = await getRomBytes(rom.id);
-          if (!bytes) { setEnriching((n) => n - 1); continue; }
-          md5 = await md5Hex(bytes);
-          await updateRomMd5(rom.id, md5);
-          setRoms((cur) => cur.map((x) => (x.id === rom.id ? { ...x, md5 } : x)));
-        } catch (e) {
-          append(`hash failed for ${rom.title || rom.filename}: ${(e as Error).message}`);
-          setEnriching((n) => n - 1);
-          continue;
-        }
-      }
-      try {
-        const m = await lookupByMd5(md5);
-        setMeta((cur) => ({ ...cur, [rom.id]: m }));
-      } catch (e) {
-        append(`lookup failed for ${rom.title || rom.filename}: ${(e as Error).message}`);
-        setMeta((cur) => ({ ...cur, [rom.id]: null }));
-      }
-      setEnriching((n) => n - 1);
-    }
-  };
-  useEffect(() => { refresh(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
   const handleFiles = async (files: FileList | File[]) => {
     setBusy(true);
@@ -107,8 +63,7 @@ export function LibraryPage() {
       }
       for (const { filename, bytes } of queue) {
         try {
-          const md5 = await md5Hex(bytes);
-          await addRom(filename, bytes, md5);
+          await add.mutateAsync({ filename, bytes });
           append(`added ${filename}`);
         } catch (e) {
           append(`add ${filename} failed: ${(e as Error).message}`);
@@ -116,7 +71,6 @@ export function LibraryPage() {
       }
     } finally {
       setBusy(false);
-      refresh();
     }
   };
 
@@ -126,7 +80,7 @@ export function LibraryPage() {
       message: `Remove "${name}" from your library?\nThe save file stays — you can re-import the ROM later.`,
       confirmLabel: 'Delete',
       danger: true,
-      onConfirm: async () => { await deleteRom(id); refresh(); },
+      onConfirm: () => { remove.mutate(id); },
     });
   };
   const onDeleteSelected = () => {
@@ -138,9 +92,9 @@ export function LibraryPage() {
       confirmLabel: `Delete ${n}`,
       danger: true,
       onConfirm: async () => {
-        for (const id of selected) await deleteRom(id);
+        for (const id of selected) await remove.mutateAsync(id);
         setSelectMode(false);
-        refresh();
+        setSelected(new Set());
       },
     });
   };
@@ -151,8 +105,7 @@ export function LibraryPage() {
       confirmLabel: 'Clear all',
       danger: true,
       onConfirm: async () => {
-        for (const r of roms) await deleteRom(r.id);
-        refresh();
+        for (const r of roms) await remove.mutateAsync(r.id);
       },
     });
   };
@@ -163,7 +116,7 @@ export function LibraryPage() {
   };
   const selectAll = () => {
     if (selected.size === roms.length) setSelected(new Set());
-    else setSelected(new Set(roms.map((r) => r.id)));
+    else setSelected(new Set(roms.map((r: RomMeta) => r.id)));
   };
 
   return (
@@ -206,71 +159,25 @@ export function LibraryPage() {
           </div>
         </label>
 
-        {enriching > 0 && (
-          <div className="text-[10px] opacity-60 mb-2 flex items-center gap-2">
-            <span className="inline-block w-2 h-2 rounded-full bg-[var(--color-accent)] animate-pulse" />
-            Fetching metadata for {enriching} ROM{enriching === 1 ? '' : 's'}…
-          </div>
-        )}
-        {roms.length === 0 ? (
+        {isLoading ? (
+          <div className="py-12 text-center opacity-50 text-xs">Loading library…</div>
+        ) : roms.length === 0 ? (
           <div className="py-12 text-center opacity-50 text-xs">
             No ROMs imported yet.<br />
             Drop a .gba file above to get started.
           </div>
         ) : (
           <ul className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-            {roms.map((rom) => {
-              const isSelected = selected.has(rom.id);
-              const m = meta[rom.id];
-              const displayName = m?.name || rom.title || rom.filename;
-              const year = m?.year ?? null;
-              const subtitleParts: string[] = [rom.code];
-              if (year) subtitleParts.push(year);
-              subtitleParts.push(`${(rom.size / (1024 * 1024)).toFixed(0)}M`);
-              return (
-                <li
-                  key={rom.id}
-                  className={`group rounded-md transition-colors ${
-                    selectMode
-                      ? isSelected
-                        ? 'ring-2 ring-[#5060a0]'
-                        : 'opacity-80 hover:opacity-100'
-                      : 'cursor-pointer hover:scale-[1.02] hover:z-10 transition-transform'
-                  }`}
-                  onClick={() => selectMode ? toggleSelected(rom.id) : navigate(`/play/${rom.id}`)}
-                >
-                  <div className="relative">
-                    <CoverImage
-                      title={displayName}
-                      subtitle={year || rom.code}
-                      thumbnails={m?.thumbnails ?? []}
-                    />
-                    {selectMode && (
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        readOnly
-                        className="absolute top-1 left-1 w-4 h-4 accent-[#5060a0] pointer-events-none"
-                      />
-                    )}
-                    {!selectMode && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); onDeleteOne(rom.id, displayName); }}
-                        className="absolute top-1 right-1 w-6 h-6 flex items-center justify-center rounded bg-black/60 text-[#9a9aa6] text-xs opacity-0 group-hover:opacity-100 focus:opacity-100 hover:!text-red-400 transition-opacity"
-                        title="Remove from library"
-                        aria-label="Remove"
-                      >🗑</button>
-                    )}
-                  </div>
-                  <div className="min-w-0 mt-1.5 px-0.5">
-                    <div className="text-[11px] font-medium leading-tight line-clamp-2" title={displayName}>{displayName}</div>
-                    <div className="text-[9px] opacity-50 truncate" title={`${rom.filename} · ${m?.platform || 'GBA'}`}>
-                      {subtitleParts.join(' · ')}
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
+            {roms.map((rom: RomMeta) => (
+              <CoverCard
+                key={rom.id}
+                rom={rom}
+                selectMode={selectMode}
+                selected={selected.has(rom.id)}
+                onActivate={() => selectMode ? toggleSelected(rom.id) : navigate(`/play/${rom.id}`)}
+                onDelete={(displayName) => onDeleteOne(rom.id, displayName)}
+              />
+            ))}
           </ul>
         )}
 
