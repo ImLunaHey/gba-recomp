@@ -86,8 +86,11 @@ export class Io implements IoBridge {
       case 0x120: case 0x122: case 0x124: case 0x126:
       case 0x128: case 0x12A:
       case 0x134: case 0x140:
-      case 0x150: case 0x152: case 0x154: case 0x156: case 0x158:
-        return this.sio.read16(addr);
+      case 0x150: case 0x152: case 0x154: case 0x156: case 0x158: {
+        const v = this.sio.read16(addr);
+        this.sio.logTrace('R', addr, v, this.cpu.state.r[15]);
+        return v;
+      }
 
       case 0x130: return this.keypad.read16();
 
@@ -167,6 +170,7 @@ export class Io implements IoBridge {
       addr === 0x134 || addr === 0x140 ||
       (addr >= 0x150 && addr <= 0x158)
     ) {
+      this.sio.logTrace('W', addr, v, this.cpu.state.r[15]);
       this.sio.write16(addr, v);
       this.raw16[addr >>> 1] = v;
       return;

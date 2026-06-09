@@ -28,26 +28,40 @@ describe('Sio register surface', () => {
     emu.loadRom(new Uint8Array(0x100));
     // Default loopback says "not connected" → SD (bit 3) is low.
     expect(emu.io.read16(0x4000128) & 0x08).toBe(0);
-    emu.io.sio.transport = { ...new LocalLoopback(), isConnected: () => true };
+    // Wrap LocalLoopback so we override only isConnected; spreading
+    // an instance drops prototype methods (isMaster, etc.) so we keep
+    // the original around instead.
+    const base = new LocalLoopback();
+    emu.io.sio.transport = {
+      isConnected: () => true,
+      isMaster: () => base.isMaster(),
+      multiplayExchange: (v) => base.multiplayExchange(v),
+      normal32Exchange: (v) => base.normal32Exchange(v),
+      normal8Exchange: (v) => base.normal8Exchange(v),
+    };
     expect(emu.io.read16(0x4000128) & 0x08).toBe(0x08);
   });
 });
 
+// Multi-play at 115200 baud is the fastest mode and needs ~12k cycles
+// to complete. Tests use that baud (SIOCNT[1:0] = 3) to keep step
+// counts small. Adding START gives 0x83 (baud=3, START=1).
+const MULTI_FAST = 0x2083;       // mode=multi, baud=115200, START=1
+const MULTI_FAST_IRQ = 0x6083;   // same + IRQ enable
+
 describe('Multi-play transfer', () => {
-  it('completes after ~one scanline and clears START', () => {
+  it('completes after the full transfer latency and clears START', () => {
     const emu = new Emulator();
     emu.loadRom(new Uint8Array(0x100));
-    // Multi-play mode (SIOCNT[13:12]=10), IRQ disabled, START high.
     emu.io.write16(0x400012A, 0x1234);     // our outgoing word
-    emu.io.write16(0x4000128, 0x2080);     // mode=multi, START=1
+    emu.io.write16(0x4000128, MULTI_FAST);
     expect(emu.io.read16(0x4000128) & 0x80).toBe(0x80);
-    // Step a few hundred cycles — under the transfer latency, START
-    // should still be high.
-    emu.io.sio.step(500);
+    // Mid-transfer — START still high.
+    emu.io.sio.step(100000);
     expect(emu.io.read16(0x4000128) & 0x80).toBe(0x80);
-    // After the full latency, START is cleared and the multi slots
-    // have our outgoing in slot 0, 0xFFFF elsewhere (loopback).
-    emu.io.sio.step(600);
+    // Past the latency — START cleared, slot 0 = our word, others
+    // = 0xFFFF (loopback "no partner").
+    emu.io.sio.step(200000);
     expect(emu.io.read16(0x4000128) & 0x80).toBe(0);
     expect(emu.io.read16(0x4000120)).toBe(0x1234);
     expect(emu.io.read16(0x4000122)).toBe(0xFFFF);
@@ -59,8 +73,8 @@ describe('Multi-play transfer', () => {
     const irq = new Irq();
     const sio = new Sio(irq);
     sio.write16(0x12A, 0xABCD);
-    sio.write16(0x128, 0x6080);            // mode=multi, IRQ=1, START=1
-    sio.step(1100);
+    sio.write16(0x128, MULTI_FAST_IRQ);
+    sio.step(280000);
     expect(irq.iflag & IRQ_SIO).toBe(IRQ_SIO);
   });
 
@@ -70,6 +84,7 @@ describe('Multi-play transfer', () => {
     let seen = -1;
     const t: LinkTransport = {
       isConnected: () => true,
+      isMaster: () => true,
       multiplayExchange: (local): MultiplayResult => {
         seen = local;
         return { d0: local & 0xFFFF, d1: 0xAAAA, d2: 0xBBBB, d3: 0xCCCC, error: false };
@@ -79,8 +94,8 @@ describe('Multi-play transfer', () => {
     };
     sio.transport = t;
     sio.write16(0x12A, 0x4242);
-    sio.write16(0x128, 0x2080);
-    sio.step(1100);
+    sio.write16(0x128, MULTI_FAST);
+    sio.step(280000);
     expect(seen).toBe(0x4242);
     expect(sio.read16(0x120)).toBe(0x4242);
     expect(sio.read16(0x122)).toBe(0xAAAA);
@@ -95,16 +110,17 @@ describe('Normal-32 transfer', () => {
     const sio = new Sio(irq);
     sio.transport = {
       isConnected: () => true,
+      isMaster: () => true,
       multiplayExchange: () => ({ d0: 0, d1: 0, d2: 0, d3: 0, error: false }),
       normal32Exchange: (local) => (~local) >>> 0,
       normal8Exchange: () => 0,
     };
-    // SIODATA32 = 0xDEAD_BEEF, mode=normal-32 (bit 12 = 1, bits 13 = 0),
-    // START=1.
+    // SIODATA32 = 0xDEAD_BEEF, mode=normal-32 (bit 12 = 1, bit 13 = 0),
+    // bit 1 = 1 → fast 2 MHz clock (~256 cycles), START=1.
     sio.write16(0x120, 0xBEEF);
     sio.write16(0x122, 0xDEAD);
-    sio.write16(0x128, 0x1080);
-    sio.step(1100);
+    sio.write16(0x128, 0x1082);
+    sio.step(300);
     const lo = sio.read16(0x120);
     const hi = sio.read16(0x122);
     expect(((hi << 16) | lo) >>> 0).toBe((~0xDEADBEEF) >>> 0);

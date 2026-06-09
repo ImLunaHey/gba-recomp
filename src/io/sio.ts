@@ -42,6 +42,21 @@ export interface LinkTransport {
   // Whether a remote partner is currently connected. Affects SIOCNT.SD
   // (data ready) and the multi-player ID stickiness during boot.
   isConnected(): boolean;
+
+  // True when this end of the link is the master GBA (cable parent /
+  // multi-player ID = 0). Implementations that don't model master/
+  // slave should return true. Affects SIOCNT.SI (bit 2, slave
+  // indicator) and the multi-player ID in bits 4-5.
+  isMaster(): boolean;
+}
+
+export interface SioTraceEntry {
+  seq: number;     // 1-based, monotonic; gives a stable order across the buffer
+  pc: number;      // PC of the instruction that issued the IO access
+  op: 'R' | 'W';
+  off: number;     // 0x120, 0x128, 0x134, etc.
+  val: number;
+  n: number;       // run length of consecutive identical accesses
 }
 
 export interface MultiplayResult {
@@ -59,6 +74,7 @@ export interface MultiplayResult {
 // and continue single-player.
 export class LocalLoopback implements LinkTransport {
   isConnected(): boolean { return false; }
+  isMaster(): boolean { return true; }
   multiplayExchange(localData: number): MultiplayResult {
     return { d0: localData & 0xFFFF, d1: 0xFFFF, d2: 0xFFFF, d3: 0xFFFF, error: false };
   }
@@ -66,15 +82,31 @@ export class LocalLoopback implements LinkTransport {
   normal8Exchange(_localData: number): number { return 0xFF; }
 }
 
-// Transfer-complete latency in CPU cycles. Real hardware varies by
-// baud; we use a single rough value (~33 µs at 16.78 MHz ≈ 550 cycles)
-// so the START bit doesn't clear synchronously — games that poll
-// SIOCNT.START would otherwise spin-detect the clear in a single MMIO
-// read and skip whatever VBlank/IRQ wait they had. Picking a value
-// roughly between "one MMIO write" and "one scanline" is the sweet
-// spot: too low and we starve the game's wait loop, too high and slow
-// games (Pokemon trade animation) feel sluggish.
-const TRANSFER_CYCLES = 1024;
+// Multi-play transfer time, in CPU cycles, by baud. On real hardware
+// this would be 12k–140k cycles depending on baud — the byte time of
+// the master/slave wire exchange. We deliberately clamp to ≈ one full
+// frame (280k cycles) here as a Phase B-1 workaround.
+//
+// Why: with a live peer connected and the game in Multi-play mode,
+// the game's transfer loop pumps as fast as transfers complete. Real
+// hardware paces this loop via the slave's actual response latency
+// (slaves don't reply until their own game frame writes SIOMLT_SEND).
+// We don't have that backpressure yet — slave data is just whatever
+// the last 33 ms WebSocket broadcast carried — so a 12k-cycle
+// transfer makes the master's logic tick ~23× per emu frame and the
+// game runs visibly that fast.
+//
+// One-transfer-per-frame trades data freshness for correct game
+// speed: cable detection still passes (a few seconds of probes), but
+// per-frame state sync drops from ~24× to 1×. Phase B-2 (lockstep
+// over the WS) will replace this clamp with real backpressure.
+const MULTI_CYCLES_BY_BAUD = [280000, 280000, 280000, 280000];
+// Normal-32 is a single 32-bit shift register at the chosen SO/SC
+// rate. SIOCNT[1] picks 256 kHz (= 64 cycles/bit) or 2 MHz (= 8
+// cycles/bit). 32 bits → ~2048 cycles slow / 256 cycles fast. Adds a
+// short fudge for setup/teardown.
+const NORMAL_CYCLES_SLOW = 2048;
+const NORMAL_CYCLES_FAST = 256;
 
 // SIOCNT[13:12] mode encoding:
 //   00 = Normal-8, 01 = Normal-32, 10 = Multi-play, 11 = UART.
@@ -106,10 +138,43 @@ export class Sio {
   private activeMode = MODE_NORMAL_8;
   private activeLen32 = false;  // Normal mode only: 1 = 32-bit, 0 = 8-bit
 
+  // Monotonic counter: how many Multi-play transfers this Sio has
+  // completed as the master. The remote slave's Sio watches this in
+  // the broadcast state and, on advance, applies the same SIOMULTI
+  // snapshot + fires SIO IRQ — that's how real hardware drives the
+  // slave's transfer machinery without the slave's software setting
+  // START. Wraps modulo 2^32; remote peer compares unsigned.
+  transferSeq = 0;
+
   // The transport is swappable at runtime so the UI can switch from
   // "no cable" loopback to a real WebRTC peer without restarting the
   // emulator.
   transport: LinkTransport = new LocalLoopback();
+
+  // Optional access trace. When enabled (via Sio.traceOn = true from
+  // the UI), every SIO/RCNT/JOY read and write is logged with the PC
+  // that issued it. Consecutive identical accesses collapse into a
+  // single entry with an incremented count — otherwise a busy-wait
+  // would saturate the buffer in a single transfer. Used to debug
+  // games like Mario Kart whose cable detection rejects SD-high alone
+  // and we need to see which register/value it's actually waiting on.
+  trace: SioTraceEntry[] = [];
+  traceOn = false;
+  private traceCap = 4096;
+  private traceSeq = 0;
+
+  logTrace(op: 'R' | 'W', off: number, val: number, pc: number): void {
+    if (!this.traceOn) return;
+    const last = this.trace[this.trace.length - 1];
+    if (last && last.pc === pc && last.op === op && last.off === off && last.val === val) {
+      last.n++;
+      return;
+    }
+    this.trace.push({ seq: ++this.traceSeq, pc, op, off, val, n: 1 });
+    if (this.trace.length > this.traceCap) this.trace.shift();
+  }
+
+  clearTrace(): void { this.trace.length = 0; this.traceSeq = 0; }
 
   constructor(public irq: Irq) {}
 
@@ -119,6 +184,19 @@ export class Sio {
     if (!this.active) return;
     this.cyclesUntilDone -= cyc;
     if (this.cyclesUntilDone <= 0) this.complete();
+  }
+
+  // Apply a Multi-play transfer that the *remote* master initiated.
+  // The transport (slave side) calls this when it sees the master's
+  // transferSeq advance. Mirrors what slave hardware does: latch the
+  // four SIOMULTI slots and fire SIO IRQ if enabled.
+  applyRemoteMultiplay(m0: number, m1: number, m2: number, m3: number, error: boolean): void {
+    this.multi[0] = m0 & 0xFFFF;
+    this.multi[1] = m1 & 0xFFFF;
+    this.multi[2] = m2 & 0xFFFF;
+    this.multi[3] = m3 & 0xFFFF;
+    if (error) this.siocnt |= 0x0040; else this.siocnt &= ~0x0040;
+    if (this.siocnt & 0x4000) this.irq.raise(IRQ_SIO);
   }
 
   // -------- read/write surface called from Io.read16/write16. --------
@@ -168,14 +246,16 @@ export class Sio {
   // SIOCNT read returns most of what was written, but a few bits are
   // hardware-driven:
   //   bit 2  SI  — slave indicator: 0 = parent / master link, 1 = child.
-  //                We always present as master (no incoming SC signal).
   //   bit 3  SD  — data ready (multi-play). High when all four GBAs
   //                are reachable. We set this from transport.isConnected.
-  //   bits 4-5 multi-player ID. 0 = master.
+  //   bits 4-5 multi-player ID. 0 = master, 1 = slave (we model 1:1
+  //   only; IDs 2-3 would be additional slaves).
   private readSiocnt(): number {
-    let v = this.siocnt & ~0x000C;
-    v &= ~0x0030;                              // ID = 0 (master)
+    let v = this.siocnt & ~0x003C;             // clear SI, SD, ID
+    const isMaster = this.transport.isMaster();
+    if (!isMaster) v |= 0x0004;                // SI high (slave)
     if (this.transport.isConnected()) v |= 0x0008;  // SD high
+    if (!isMaster) v |= 0x0010;                // ID = 1 (slave 1)
     return v;
   }
 
@@ -201,9 +281,16 @@ export class Sio {
     const mode = (this.siocnt >> 12) & 3;
     this.activeMode = mode;
     this.activeLen32 = mode === MODE_NORMAL_32;
-    if (mode === MODE_NORMAL_8 || mode === MODE_NORMAL_32 || mode === MODE_MULTI) {
+    if (mode === MODE_NORMAL_8 || mode === MODE_NORMAL_32) {
+      // Normal mode shift-clock: SIOCNT bit 1 picks 256 kHz (= slow)
+      // vs 2 MHz (= fast). Bit 0 is SC direction (external vs
+      // internal), which doesn't affect duration of the transfer in
+      // our model — we always complete it.
+      this.cyclesUntilDone = (this.siocnt & 2) ? NORMAL_CYCLES_FAST : NORMAL_CYCLES_SLOW;
       this.active = true;
-      this.cyclesUntilDone = TRANSFER_CYCLES;
+    } else if (mode === MODE_MULTI) {
+      this.cyclesUntilDone = MULTI_CYCLES_BY_BAUD[this.siocnt & 3];
+      this.active = true;
     } else {
       // UART — accepted, but we don't model the byte stream. Clear
       // START immediately so the game's wait loop doesn't hang.
@@ -220,6 +307,9 @@ export class Sio {
       this.multi[2] = r.d2 & 0xFFFF;
       this.multi[3] = r.d3 & 0xFFFF;
       if (r.error) this.siocnt |= 0x0040; else this.siocnt &= ~0x0040;
+      // Bump seq so a watching slave Sio applies the same SIOMULTI
+      // snapshot + IRQ as if its hardware had been pulled along.
+      this.transferSeq = (this.transferSeq + 1) >>> 0;
     } else if (this.activeLen32) {
       // Normal-32. SIODATA32 = multi[0] (lo) | multi[1] (hi) — same
       // backing as multi-play slot 0/1.
