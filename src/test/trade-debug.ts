@@ -55,6 +55,25 @@
 // underlying failure is the same: phase 2's command exchange is
 // reading zeros instead of valid command codes.
 //
+// ROUND 5: traced the error trigger to the task scheduler. The error
+// dialog renders because a SCRIPT INTERPRETER at PC 0x80998b0 / queue
+// at IWRAM 0x03000e40 enqueues a task with handler pointer
+// 0x02002050 (the error screen routine) ~14 frames after entering
+// phase 2. The script bytecode is at ROM 0x82770e0+. The trigger
+// condition is somewhere inside that bytecode — likely a "did the
+// link partner respond as expected?" check on a specific command
+// code our SIO model isn't producing.
+//
+// PC 0x8098de8 is the task-transition function (PUSH current task,
+// SWITCH to new task); 6 places in the link library call it,
+// passing the new task handler as arg1.
+//
+// Without a real-hardware reference trace of the expected SIO data
+// for this exact scenario, we can't identify which specific command
+// our model produces wrong. A second savestate captured AT the error
+// frame would let us diff IWRAM/EWRAM against the current "Please
+// wait" state and immediately localize the divergent byte.
+//
 // ROUND 4 BREAKTHROUGH: phase 1 advances and phase 2 BRIEFLY SUCCEEDS.
 //
 // With (a) realistic SIO timing (committed in 4364cb1), (b) the
