@@ -20,4 +20,20 @@ export default defineConfig({
     target: 'esnext',
   },
   assetsInclude: ['**/*.gba'],
+  test: {
+    coverage: {
+      provider: 'v8',
+      // Cover only the recompiler source, not the React UI / Cloudflare
+      // worker / test helpers — those are exercised mostly through
+      // end-to-end paths that aren't part of the unit test surface.
+      include: ['src/cpu/**', 'src/io/**', 'src/memory/**', 'src/ppu/**', 'src/emulator.ts', 'src/savestate.ts'],
+      exclude: [
+        '**/*.test.ts',
+        'src/test/**',
+        '**/node_modules/**',
+      ],
+      reporter: ['text', 'json', 'html', 'lcov'],
+      reportsDirectory: './coverage',
+    },
+  },
 });

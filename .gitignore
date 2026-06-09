@@ -9,6 +9,7 @@ public/*.sav
 *.sav
 _*.png
 tsconfig.tsbuildinfo
+coverage
 
 # wrangler files
 .wrangler

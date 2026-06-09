@@ -275,9 +275,21 @@ export class Sio {
 
   private writeSiocnt(v: number): void {
     const wasStart = (this.siocnt & 0x80) !== 0;
-    // Bits 2-5 are read-only on real hardware (status). Bits 0-1 (baud),
-    // 7 (start), 12-13 (mode), 14 (IRQ), 6 (error clear-on-write) are
-    // writable; we just store the lot and selectively ignore reads.
+    // GBATEK SIO Multi-Player Mode, 4000128h - SIOCNT:
+    //   Bit 7  Start/Busy Bit  (0=Inactive, 1=Start/Busy) (Read Only for Slaves)
+    // So in Multi-play mode a slave's software write to bit 7 has no
+    // effect on real hardware — the bit is hardware-controlled (set
+    // when master initiates the transfer, cleared at end). Without
+    // this guard a slave's software clobbering SIOCNT could trigger
+    // beginTransfer() on the slave's Sio, which then races with the
+    // master's actual transfer and corrupts SIOMULTI state on the
+    // slave side.
+    const mode = (v >> 12) & 3;
+    if (mode === MODE_MULTI && !this.transport.isMaster()) {
+      // Slave path — preserve the current bit 7 instead of taking
+      // whatever the slave wrote.
+      v = (v & ~0x80) | (this.siocnt & 0x80);
+    }
     this.siocnt = v;
 
     const start = (v & 0x80) !== 0;

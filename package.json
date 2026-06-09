@@ -10,6 +10,7 @@
     "boot": "tsx src/test/boot.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "lint": "oxlint src",
     "deploy": "npm run build && wrangler deploy"
   },
@@ -21,6 +22,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
+    "@vitest/coverage-v8": "^4.1.8",
     "oxlint": "^1.68.0",
     "tailwindcss": "^4.3.0",
     "tsx": "^4.22.4",
