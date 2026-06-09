@@ -55,6 +55,36 @@
 // underlying failure is the same: phase 2's command exchange is
 // reading zeros instead of valid command codes.
 //
+// ROUND 4 BREAKTHROUGH: phase 1 advances and phase 2 BRIEFLY SUCCEEDS.
+//
+// With (a) realistic SIO timing (committed in 4364cb1), (b) the
+// SIOMULTI=0xFFFF reset on transfer start (committed in 7d5a304), AND
+// (c) injecting iwram[0x03003144] = 1 every frame plus (d) blocking
+// the SWI 0x0B clear of struct1[0..3]:
+//
+//   - state advances 2 → 3 → 4 (phase 1 handshake succeeds — master
+//     transitions to sending 0x8FFF as expected)
+//   - phase 2 starts and master sends real command codes: master
+//     observed sending 0xffc0, 0x2222, 0x1133, 0x0000 alternating;
+//     slave responds with 0x7ff8 then transitions to 0
+//   - the actual trade dialog ("Where would you like to trade?")
+//     briefly renders on screen between f=5 and f=10
+//   - then the in-game task scheduler swaps the trade task for the
+//     error task and the dialog transitions to "Sorry, we have a
+//     link error"
+//
+// The task swap happens in EWRAM/IWRAM around 0x03000440 → 0x03000570
+// (a 0x40-byte task struct gets freed at the first address and a
+// new task allocated at the second, with what looks like an EWRAM
+// function pointer 0x02002050 as the new task's handler — likely the
+// "link error" screen routine).
+//
+// So the SIO data flow is correct enough to advance the protocol
+// through both phases. The remaining failure is somewhere in phase 2's
+// per-iteration state checks deciding "the link is bad, swap to
+// error task." That decision either reads a struct field our model
+// fills wrong, or a transfer's data didn't match an expected value.
+//
 // Round 3 (the deepest pass): traced the role-byte transition. struct1[14]
 // = 1 is set by state-2 dispatcher target (PC 0x0800b6b6) gated on three
 // conditions: arg0[0]=1 (where arg0=IWRAM 0x03003144), struct1[0]==8
