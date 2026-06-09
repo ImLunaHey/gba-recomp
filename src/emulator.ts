@@ -159,6 +159,7 @@ export class Emulator {
       }
       ppu.step(i);
       timers.step(i);
+      this.io.sio.step(i);
       executed += i;
       if (ppu.frameDone) { ppu.frameDone = false; break; }
     }

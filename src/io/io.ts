@@ -6,6 +6,7 @@ import { Keypad } from './keypad';
 import type { Ppu } from '../ppu/ppu';
 import type { Cpu } from '../cpu/cpu';
 import type { Sound } from './sound';
+import { Sio } from './sio';
 
 export class Io implements IoBridge {
   // Generic backing store for IO regs (1 KB). Most reads/writes that don't
@@ -23,6 +24,11 @@ export class Io implements IoBridge {
   // headless tests that don't care about audio don't need to wire it.
   sound: Sound | null = null;
 
+  // Serial / link-cable controller. Constructed eagerly here (no
+  // dependency cycle to dodge) so the SIOCNT/SIODATA/RCNT/JOY ranges
+  // are mapped from the first read.
+  sio: Sio;
+
   constructor(
     public bus: Bus,
     public ppu: Ppu,
@@ -34,6 +40,7 @@ export class Io implements IoBridge {
   ) {
     this.raw16 = new Uint16Array(this.raw.buffer);
     this.raw32 = new Uint32Array(this.raw.buffer);
+    this.sio = new Sio(irq);
   }
 
   read8(addr: number): number {
@@ -75,6 +82,12 @@ export class Io implements IoBridge {
         return this.timers.readCounter((addr - 0x100) >>> 2);
       case 0x102: case 0x106: case 0x10A: case 0x10E:
         return this.timers.readControl((addr - 0x102) >>> 2);
+
+      case 0x120: case 0x122: case 0x124: case 0x126:
+      case 0x128: case 0x12A:
+      case 0x134: case 0x140:
+      case 0x150: case 0x152: case 0x154: case 0x156: case 0x158:
+        return this.sio.read16(addr);
 
       case 0x130: return this.keypad.read16();
 
@@ -143,6 +156,18 @@ export class Io implements IoBridge {
       const isReload = (addr & 2) === 0;
       if (isReload) this.timers.writeReload(i, v);
       else          this.timers.writeControl(i, v);
+      this.raw16[addr >>> 1] = v;
+      return;
+    }
+    // Serial / link cable. Always route through Sio (no mirror in raw)
+    // so reads observe the live state machine. We still preserve the
+    // raw16 mirror for any odd byte-write paths that need a fallback.
+    if (
+      (addr >= 0x120 && addr <= 0x12A) ||
+      addr === 0x134 || addr === 0x140 ||
+      (addr >= 0x150 && addr <= 0x158)
+    ) {
+      this.sio.write16(addr, v);
       this.raw16[addr >>> 1] = v;
       return;
     }
