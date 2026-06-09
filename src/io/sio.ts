@@ -92,25 +92,24 @@ export class LocalLoopback implements LinkTransport {
   normal8Exchange(_localData: number): number { return 0xFF; }
 }
 
-// Multi-play transfer time, in CPU cycles, by baud. On real hardware
-// this would be 12k–140k cycles depending on baud — the byte time of
-// the master/slave wire exchange. We deliberately clamp to ≈ one full
-// frame (280k cycles) here as a Phase B-1 workaround.
+// Multi-play transfer time, in CPU cycles, by baud. Approximating real
+// hardware: each transfer is one start bit + 64 bits of data (16 bits
+// per slot × 4 slots) + a stop bit. At 16.78 MHz CPU clock:
+//   baud 0 (9600 bps):   ~115000 cycles
+//   baud 1 (38400 bps):   ~29000 cycles
+//   baud 2 (57600 bps):   ~19000 cycles
+//   baud 3 (115200 bps):   ~9500 cycles
 //
-// Why: with a live peer connected and the game in Multi-play mode,
-// the game's transfer loop pumps as fast as transfers complete. Real
-// hardware paces this loop via the slave's actual response latency
-// (slaves don't reply until their own game frame writes SIOMLT_SEND).
-// We don't have that backpressure yet — slave data is just whatever
-// the last 33 ms WebSocket broadcast carried — so a 12k-cycle
-// transfer makes the master's logic tick ~23× per emu frame and the
-// game runs visibly that fast.
-//
-// One-transfer-per-frame trades data freshness for correct game
-// speed: cable detection still passes (a few seconds of probes), but
-// per-frame state sync drops from ~24× to 1×. Phase B-2 (lockstep
-// over the WS) will replace this clamp with real backpressure.
-const MULTI_CYCLES_BY_BAUD = [280000, 280000, 280000, 280000];
+// We were previously clamping all four to 280000 (≈ one emu frame) as
+// a B-1 hack because the master's transfer loop would spin too fast
+// without per-transfer backpressure. With B-2 lockstep now in place
+// (requestMultiplay synchronously awaits the slave's response, so the
+// master can't outpace the peer regardless of these numbers), the
+// real-hardware values are safe to restore — and *necessary* for
+// games like Pokemon Emerald whose link handshake needs many transfers
+// per frame to walk its state machine before its missed-packet
+// timeout (~8 transfers) fires.
+const MULTI_CYCLES_BY_BAUD = [115000, 29000, 19000, 9500];
 // Normal-32 is a single 32-bit shift register at the chosen SO/SC
 // rate. SIOCNT[1] picks 256 kHz (= 64 cycles/bit) or 2 MHz (= 8
 // cycles/bit). 32 bits → ~2048 cycles slow / 256 cycles fast. Adds a

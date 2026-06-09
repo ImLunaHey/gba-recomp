@@ -54,14 +54,16 @@ describe('Multi-play transfer', () => {
     const emu = new Emulator();
     emu.loadRom(new Uint8Array(0x100));
     emu.io.write16(0x400012A, 0x1234);     // our outgoing word
-    emu.io.write16(0x4000128, MULTI_FAST);
+    emu.io.write16(0x4000128, MULTI_FAST);  // baud 3, ~9500 cycles
     expect(emu.io.read16(0x4000128) & 0x80).toBe(0x80);
-    // Mid-transfer — START still high.
-    emu.io.sio.step(100000);
+    // Mid-transfer — START still high (5000 < 9500 cycle target).
+    emu.io.sio.step(5000);
     expect(emu.io.read16(0x4000128) & 0x80).toBe(0x80);
     // Past the latency — START cleared, slot 0 = our word, others
-    // = 0xFFFF (loopback "no partner").
-    emu.io.sio.step(200000);
+    // = 0xFFFF (loopback "no partner"). Master Sio also resets
+    // SIOMULTI to 0xFFFF at transfer start now; before complete()
+    // populates slot 0 it would have shown 0xFFFF too.
+    emu.io.sio.step(10000);
     expect(emu.io.read16(0x4000128) & 0x80).toBe(0);
     expect(emu.io.read16(0x4000120)).toBe(0x1234);
     expect(emu.io.read16(0x4000122)).toBe(0xFFFF);
