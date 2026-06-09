@@ -29,7 +29,7 @@ export function CartArt({ title, subtitle, className }: Props) {
       className={`relative overflow-hidden rounded-md flex flex-col justify-end ${className ?? ''}`}
       style={{
         background: `linear-gradient(135deg, ${c.bg} 0%, ${c.accent} 100%)`,
-        aspectRatio: '2 / 3',
+        aspectRatio: '1 / 1',
       }}
       aria-hidden
     >

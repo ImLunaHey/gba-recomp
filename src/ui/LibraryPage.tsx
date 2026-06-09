@@ -230,12 +230,12 @@ export function LibraryPage() {
               return (
                 <li
                   key={rom.id}
-                  className={`group flex flex-col gap-2 p-2 rounded-md transition-colors ${
+                  className={`group rounded-md transition-colors ${
                     selectMode
                       ? isSelected
-                        ? 'bg-[#3a3a5a] ring-1 ring-[#5060a0]'
-                        : 'bg-[#1c1c22] hover:bg-[#24242a]'
-                      : 'bg-[#1c1c22] hover:bg-[#24242a] cursor-pointer'
+                        ? 'ring-2 ring-[#5060a0]'
+                        : 'opacity-80 hover:opacity-100'
+                      : 'cursor-pointer hover:scale-[1.02] hover:z-10 transition-transform'
                   }`}
                   onClick={() => selectMode ? toggleSelected(rom.id) : navigate(`/play/${rom.id}`)}
                 >
@@ -250,7 +250,7 @@ export function LibraryPage() {
                         type="checkbox"
                         checked={isSelected}
                         readOnly
-                        className="absolute top-1 left-1 w-3.5 h-3.5 accent-[#5060a0] pointer-events-none"
+                        className="absolute top-1 left-1 w-4 h-4 accent-[#5060a0] pointer-events-none"
                       />
                     )}
                     {!selectMode && (
@@ -262,7 +262,7 @@ export function LibraryPage() {
                       >🗑</button>
                     )}
                   </div>
-                  <div className="min-w-0">
+                  <div className="min-w-0 mt-1.5 px-0.5">
                     <div className="text-[11px] font-medium leading-tight line-clamp-2" title={displayName}>{displayName}</div>
                     <div className="text-[9px] opacity-50 truncate" title={`${rom.filename} · ${m?.platform || 'GBA'}`}>
                       {subtitleParts.join(' · ')}

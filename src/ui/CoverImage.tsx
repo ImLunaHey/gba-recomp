@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { CartArt } from './CartArt';
+import { __sweepOldVersions as sweep } from './hasheous';
 
 // Try the LibRetro thumbnail URLs in order. First one that loads wins;
 // if all fail (404 / network error), fall back to the styled CartArt
@@ -13,7 +14,10 @@ interface Props {
   className?: string;
 }
 
-const CACHE_PREFIX = 'gba-recomp:cover:';
+// Bump when probe behavior changes — old sessionStorage entries from
+// when COEP was blocking the load cached failures that are now stale.
+const CACHE_PREFIX = 'gba-recomp:cover:v2:';
+sweep('gba-recomp:cover:', CACHE_PREFIX, sessionStorage);
 
 function readCached(title: string): string | null | undefined {
   try {
@@ -59,14 +63,17 @@ export function CoverImage({ title, subtitle, thumbnails, className }: Props) {
   if (resolved) {
     return (
       <div
-        className={`relative overflow-hidden rounded-md bg-black ${className ?? ''}`}
-        style={{ aspectRatio: '2 / 3' }}
+        className={`relative overflow-hidden rounded-md bg-[#0a0a0c] ${className ?? ''}`}
+        style={{ aspectRatio: '1 / 1' }}
       >
+        {/* object-contain so heterogeneous LibRetro thumbnails (some
+            512×512 padded, some weird like 256×229) render whole
+            instead of getting cropped to fit the card. */}
         <img
           src={resolved}
           alt={title}
           loading="lazy"
-          className="absolute inset-0 w-full h-full object-cover"
+          className="absolute inset-0 w-full h-full object-contain"
         />
       </div>
     );

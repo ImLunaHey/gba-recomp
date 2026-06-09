@@ -76,8 +76,23 @@ export interface HasheousMeta {
 }
 
 // Bump when HasheousMeta's shape changes — old cache entries from
-// previous schema (no `thumbnails` array, etc.) will be ignored.
+// previous schema (no `thumbnails` array, etc.) will be ignored. We
+// sweep older versions out of storage at module load so they don't
+// occupy quota indefinitely.
 const KEY_PREFIX = 'gba-recomp:hasheous:v2:';
+sweepOldVersions('gba-recomp:hasheous:', KEY_PREFIX, localStorage);
+
+function sweepOldVersions(family: string, current: string, store: Storage): void {
+  try {
+    const stale: string[] = [];
+    for (let i = 0; i < store.length; i++) {
+      const k = store.key(i);
+      if (k && k.startsWith(family) && !k.startsWith(current)) stale.push(k);
+    }
+    for (const k of stale) store.removeItem(k);
+  } catch { /* private mode or storage disabled */ }
+}
+export const __sweepOldVersions = sweepOldVersions;
 
 function readCache(md5: string): HasheousMeta | null | undefined {
   try {
