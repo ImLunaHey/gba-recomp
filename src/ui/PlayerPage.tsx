@@ -170,16 +170,28 @@ export function PlayerPage() {
   };
   const onUploadSave = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file) { append('upload cancelled (no file)'); return; }
     file.arrayBuffer().then((buf) => {
       emu.save.loadSave(new Uint8Array(buf));
       try {
         localStorage.setItem(saveKeyRef.current, bytesToBase64(emu.save.data));
-      } catch { /* ignore */ }
-      append(`uploaded save (${buf.byteLength} bytes)`);
+      } catch (err) {
+        append('localStorage write failed:', (err as Error).message);
+      }
+      append(`uploaded save (${buf.byteLength} bytes) — press Reset to apply`);
+    }).catch((err) => {
+      append('save upload failed:', (err as Error).message);
     });
     e.target.value = '';
   };
+  // The file input has to live OUTSIDE the dropdown menu, because the
+  // moment the user clicks the import label the native file picker
+  // opens and the mouse leaves the dropdown area — onMouseLeave then
+  // unmounts the menu and the <input>, so when the user finally picks
+  // a file there's no listener left to receive the onChange. Mounting
+  // the input at the top level + triggering it via a ref dodges that
+  // entirely.
+  const saveInputRef = useRef<HTMLInputElement>(null);
   // Fullscreen target wraps just the Screen (+ stats line) so the
   // toolbar and modals don't render while fullscreen is active. The
   // `:fullscreen` CSS rule on canvas#screen handles the aspect-
@@ -255,15 +267,10 @@ export function PlayerPage() {
                   onClick={() => { onDownloadSave(); setShowSaveMenu(false); }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#24242a] text-xs"
                 >Export .sav</button>
-                <label className="block w-full text-left px-3 py-1.5 hover:bg-[#24242a] cursor-pointer text-xs">
-                  Import .sav
-                  <input
-                    type="file"
-                    accept=".sav,.bin"
-                    onChange={(e) => { onUploadSave(e); setShowSaveMenu(false); }}
-                    className="hidden"
-                  />
-                </label>
+                <button
+                  onClick={() => { saveInputRef.current?.click(); setShowSaveMenu(false); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#24242a] text-xs"
+                >Import .sav</button>
                 <button
                   onClick={() => { onClearSave(); setShowSaveMenu(false); }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#24242a] text-xs text-red-300"
@@ -304,6 +311,16 @@ export function PlayerPage() {
         cheats={cheats}
         onChange={setCheats}
         onClose={() => setShowCheats(false)}
+      />
+      {/* Top-level hidden file input for save imports — see saveInputRef
+        * for why this is mounted here rather than inside the Save
+        * dropdown. */}
+      <input
+        ref={saveInputRef}
+        type="file"
+        accept=".sav,.bin"
+        onChange={onUploadSave}
+        className="hidden"
       />
       {confirm.node}
     </>
