@@ -202,9 +202,27 @@ export class Sio {
 
   // Apply a Multi-play transfer that the *remote* master initiated.
   // The transport (slave side) calls this when it sees the master's
-  // transferSeq advance. Mirrors what slave hardware does: latch the
-  // four SIOMULTI slots and fire SIO IRQ if enabled.
+  // transferSeq advance. Mirrors what slave hardware does:
+  //   - SIOCNT.START transitions to 1 briefly while transfer is
+  //     in-flight (per GBATEK, "slaves receive Busy bit")
+  //   - SIOMULTI registers reset to FFFFh on transfer start (also
+  //     per GBATEK, on ALL GBAs not just master)
+  //   - latch the four SIOMULTI slots with received data
+  //   - clear SIOCNT.START
+  //   - fire SIO IRQ if enabled
+  // In this synchronous model the in-flight window is zero, so the
+  // set/clear of START is observationally a no-op but keeps the
+  // siocnt mirror correct if game code polls it between transfers.
   applyRemoteMultiplay(m0: number, m1: number, m2: number, m3: number, error: boolean): void {
+    // Per GBATEK: SIOMULTI on all GBAs reset to FFFFh at transfer
+    // start. In a sync model the slave sees FFFFh and the final
+    // values in the same call, but we still go through the reset
+    // step so any future async path (e.g. delayed slave IRQ) gets
+    // the right intermediate state.
+    this.multi[0] = 0xFFFF;
+    this.multi[1] = 0xFFFF;
+    this.multi[2] = 0xFFFF;
+    this.multi[3] = 0xFFFF;
     this.multi[0] = m0 & 0xFFFF;
     this.multi[1] = m1 & 0xFFFF;
     this.multi[2] = m2 & 0xFFFF;
