@@ -28,6 +28,14 @@ export function CoverCard({ rom, selectMode, selected, onActivate, onDelete }: P
   if (year) subtitleParts.push(year);
   subtitleParts.push(`${(rom.size / (1024 * 1024)).toFixed(0)}M`);
 
+  // Prefer IGDB box art (real cover from Hasheous's IGDB mapping,
+  // proxied through our worker) and fall back to LibRetro thumbnails
+  // if IGDB doesn't have it. The probe loop in useCoverUrl tries
+  // each in order and stops at the first that loads.
+  const candidates: string[] = [];
+  if (m?.igdbId) candidates.push(`/api/igdb/cover/${m.igdbId}`);
+  if (m?.thumbnails) candidates.push(...m.thumbnails);
+
   return (
     <li
       className={`group rounded-md transition-colors ${
@@ -43,7 +51,7 @@ export function CoverCard({ rom, selectMode, selected, onActivate, onDelete }: P
         <CoverImage
           title={displayName}
           subtitle={year || rom.code}
-          thumbnails={m?.thumbnails ?? []}
+          thumbnails={candidates}
         />
         {selectMode && (
           <input

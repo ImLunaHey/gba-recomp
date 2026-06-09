@@ -1,17 +1,17 @@
 // Cloudflare Worker entry point.
 //
-// Two responsibilities:
-//   1. Proxy /api/hasheous/* → https://hasheous.org/api/v1/* and add the
-//      CORS header the upstream omits, so the SPA can call it from the
-//      browser. Hasheous responds 200 + JSON but no Access-Control-Allow-
-//      Origin, which the browser then strips from JS.
-//   2. Let everything else fall through to the static assets binding
-//      (the Vite build output). The wrangler config has
-//      not_found_handling: single-page-application so unknown asset
-//      paths serve index.html for client-side routing.
+// Responsibilities:
+//   1. Proxy /api/hasheous/* → https://hasheous.org/api/v1/* with CORS.
+//   2. Serve /api/igdb/cover/<igdb_game_id> by looking up the IGDB
+//      cover for that game ID and 302-redirecting to the actual image
+//      URL on images.igdb.com. The Twitch OAuth token is cached
+//      in-memory so subsequent requests don't re-auth.
+//   3. Everything else falls through to the static assets binding.
 
 export interface Env {
   ASSETS: Fetcher;
+  TWITCH_CLIENT_ID?: string;
+  TWITCH_CLIENT_SECRET?: string;
 }
 
 const HASHEOUS_BASE = 'https://hasheous.org/api/v1';
@@ -23,17 +23,18 @@ export default {
     if (url.pathname.startsWith('/api/hasheous/')) {
       return proxyHasheous(req, url);
     }
+    if (url.pathname.startsWith('/api/igdb/cover/')) {
+      return igdbCover(url, env);
+    }
 
     return env.ASSETS.fetch(req);
   },
 };
 
+// ---------------------------------------------------------------- Hasheous
+
 async function proxyHasheous(req: Request, url: URL): Promise<Response> {
-  // /api/hasheous/lookup/md5/<hash>  →  /api/v1/Lookup/ByHash/md5/<hash>
-  // Strip the /api/hasheous prefix and re-cased path the way Hasheous
-  // expects (their paths are PascalCase).
   const rest = url.pathname.replace(/^\/api\/hasheous/, '');
-  // Map the user-facing kebab path back to Hasheous's casing.
   const upstreamPath = rest
     .replace(/^\/lookup\/byhash\//i, '/Lookup/ByHash/')
     .replace(/^\/healthcheck/i, '/Healthcheck')
@@ -41,38 +42,117 @@ async function proxyHasheous(req: Request, url: URL): Promise<Response> {
   const upstream = HASHEOUS_BASE + upstreamPath + url.search;
 
   if (req.method === 'OPTIONS') {
-    return new Response(null, {
-      status: 204,
-      headers: corsHeaders('GET, OPTIONS'),
-    });
+    return new Response(null, { status: 204, headers: corsHeaders('GET, OPTIONS') });
   }
   if (req.method !== 'GET') {
-    return new Response('method not allowed', {
-      status: 405,
-      headers: corsHeaders('GET, OPTIONS'),
-    });
+    return new Response('method not allowed', { status: 405, headers: corsHeaders('GET, OPTIONS') });
   }
 
   const upstreamResp = await fetch(upstream, {
     method: 'GET',
     headers: { 'Accept': 'application/json' },
-    // Cache responses at the edge — Hasheous metadata for a given hash
-    // is effectively static, save the round-trip for repeat lookups.
     cf: { cacheTtl: 86400, cacheEverything: true },
   });
 
   const headers = new Headers(upstreamResp.headers);
   for (const [k, v] of Object.entries(corsHeaders('GET, OPTIONS'))) headers.set(k, v);
-  // Drop hop-by-hop bits that don't apply to the re-emitted response.
   headers.delete('alt-svc');
   headers.delete('server');
-
   return new Response(upstreamResp.body, {
     status: upstreamResp.status,
     statusText: upstreamResp.statusText,
     headers,
   });
 }
+
+// ---------------------------------------------------------------- IGDB
+
+// Worker-local cache for the Twitch app-access token. Twitch tokens
+// last ~60 days; we refresh just before expiry. This cache lives in
+// the Worker isolate so a single Worker handles many requests with
+// one token, but cold isolates pay one extra Twitch round-trip.
+let cachedToken: { value: string; expiresAt: number } | null = null;
+
+async function getTwitchToken(env: Env): Promise<string> {
+  if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) {
+    return cachedToken.value;
+  }
+  if (!env.TWITCH_CLIENT_ID || !env.TWITCH_CLIENT_SECRET) {
+    throw new Error('TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET not configured');
+  }
+  const body = new URLSearchParams({
+    client_id: env.TWITCH_CLIENT_ID,
+    client_secret: env.TWITCH_CLIENT_SECRET,
+    grant_type: 'client_credentials',
+  });
+  const resp = await fetch('https://id.twitch.tv/oauth2/token', {
+    method: 'POST',
+    body,
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  });
+  if (!resp.ok) throw new Error(`Twitch token request failed: ${resp.status}`);
+  const json = await resp.json() as { access_token: string; expires_in: number };
+  cachedToken = {
+    value: json.access_token,
+    expiresAt: Date.now() + json.expires_in * 1000,
+  };
+  return cachedToken.value;
+}
+
+async function igdbCover(url: URL, env: Env): Promise<Response> {
+  const idStr = url.pathname.replace(/^\/api\/igdb\/cover\//, '');
+  const igdbId = parseInt(idStr, 10);
+  if (!Number.isFinite(igdbId) || igdbId <= 0) {
+    return new Response('bad game id', { status: 400, headers: corsHeaders('GET, OPTIONS') });
+  }
+  let token: string;
+  try {
+    token = await getTwitchToken(env);
+  } catch (e) {
+    return new Response((e as Error).message, { status: 500, headers: corsHeaders('GET, OPTIONS') });
+  }
+
+  // IGDB's covers endpoint — POST body in their custom Apicalypse DSL.
+  // Returns at most one cover (we limit to 1) with the image_id we need.
+  const body = `where game = ${igdbId}; fields image_id; limit 1;`;
+  const igdbResp = await fetch('https://api.igdb.com/v4/covers', {
+    method: 'POST',
+    body,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Client-ID': env.TWITCH_CLIENT_ID!,
+      'Accept': 'application/json',
+      'Content-Type': 'text/plain',
+    },
+  });
+  if (!igdbResp.ok) {
+    return new Response('igdb cover lookup failed', {
+      status: igdbResp.status,
+      headers: corsHeaders('GET, OPTIONS'),
+    });
+  }
+  const covers = await igdbResp.json() as Array<{ image_id?: string }>;
+  if (!covers.length || !covers[0].image_id) {
+    return new Response('no cover', { status: 404, headers: corsHeaders('GET, OPTIONS') });
+  }
+  const imageUrl = `https://images.igdb.com/igdb/image/upload/t_cover_big/${covers[0].image_id}.jpg`;
+  // Stream the image bytes back through the worker so the browser
+  // sees same-origin pixels (no CORS, no referrer leak to igdb.com)
+  // and we can edge-cache the image too.
+  const imageResp = await fetch(imageUrl, {
+    cf: { cacheTtl: 7 * 24 * 3600, cacheEverything: true },
+  });
+  const headers = new Headers(imageResp.headers);
+  for (const [k, v] of Object.entries(corsHeaders('GET, OPTIONS'))) headers.set(k, v);
+  headers.set('Cache-Control', 'public, max-age=604800');
+  return new Response(imageResp.body, {
+    status: imageResp.status,
+    statusText: imageResp.statusText,
+    headers,
+  });
+}
+
+// ---------------------------------------------------------------- CORS
 
 function corsHeaders(allowMethods: string): Record<string, string> {
   return {

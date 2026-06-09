@@ -70,6 +70,10 @@ export interface HasheousMeta {
   year: string | null;        // "2004" (string, not int — Hasheous sometimes has ranges)
   region: string | null;      // first known region code: "USA", "Europe", "Japan", etc.
   description: string | null; // long-form blurb (AI-generated or curated)
+  // IGDB game ID — used by the /api/igdb/cover/<id> worker endpoint
+  // to fetch real box art. Null when Hasheous didn't map this hash to
+  // an IGDB entry.
+  igdbId: number | null;
   // Box-art URL candidates to try in order. First successful load wins;
   // last entry is the placeholder fallback signal (empty string).
   thumbnails: string[];
@@ -90,7 +94,8 @@ export interface HasheousMeta {
       if (k && (
         k.startsWith('gba-recomp:hasheous:') ||
         k.startsWith('gba-recomp:cover:') ||
-        k === 'gba-recomp:rq:v1'
+        k === 'gba-recomp:rq:v1' ||
+        k === 'gba-recomp:rq:v2'
       )) stale.push(k);
     }
     for (const k of stale) localStorage.removeItem(k);
@@ -140,9 +145,22 @@ function parseHasheousBody(body: Record<string, unknown>): HasheousMeta {
     if (desc) description = (desc.value as string) ?? null;
   }
 
+  // Find the IGDB game id from the metadata array. The lookup
+  // response has a nested object that lists every metadata source
+  // and the id assigned to this game under each. IGDB ids are short
+  // numerics; we parse to int and ignore non-numeric values.
+  let igdbId: number | null = null;
+  const metas = body.metadata as Array<Record<string, unknown>> | undefined;
+  if (metas) {
+    const igdb = metas.find((m) => m.source === 'IGDB');
+    const raw = igdb?.id;
+    if (typeof raw === 'string' && /^\d+$/.test(raw)) igdbId = parseInt(raw, 10);
+    else if (typeof raw === 'number') igdbId = raw;
+  }
+
   const thumbnails = name && platformName ? buildThumbnailUrls(name, platformName, region) : [];
 
-  return { name, platform: platformName, publisher, year, region, description, thumbnails };
+  return { name, platform: platformName, publisher, year, region, description, igdbId, thumbnails };
 }
 
 // Construct candidate URLs to try against the LibRetro thumbnails
