@@ -307,6 +307,19 @@ export class Sio {
       this.cyclesUntilDone = MULTI_CYCLES_BY_BAUD[this.siocnt & 3];
       this.active = true;
       this.pendingMulti = null;
+      // Per GBATEK: at the moment master sets SIOCNT.START, all four
+      // SIOMULTI registers reset to 0xFFFF on every GBA on the cable.
+      // The actual transferred values appear only when the transfer
+      // completes. Software that polls SIOMULTI during the in-flight
+      // window expects to see the FFFF "no data yet" sentinel; if it
+      // sees stale values from the previous transfer instead, the
+      // game's protocol logic can mis-interpret the state. Pokemon
+      // Emerald's trade handshake specifically checks SIOMULTI values
+      // mid-transfer and we'd been delivering stale data.
+      this.multi[0] = 0xFFFF;
+      this.multi[1] = 0xFFFF;
+      this.multi[2] = 0xFFFF;
+      this.multi[3] = 0xFFFF;
       // Lockstep: ask the transport for a synchronized peer response.
       // If it accepts the request, we'll force-complete the moment
       // the callback fires (typically before the cycle budget ends),
