@@ -12,5 +12,13 @@
   },
   "compatibility_flags": [
     "nodejs_compat"
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "SIGNAL", "class_name": "SignalRoom" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SignalRoom"] }
   ]
 }

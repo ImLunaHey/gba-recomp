@@ -10,6 +10,7 @@ import { ControllerPanel } from './ControllerPanel';
 import { DebugPanel } from './DebugPanel';
 import { ErrorBoundary } from './ErrorBoundary';
 import { CheatsPanel, loadCheatsFor } from './CheatsPanel';
+import { LinkPanel } from './LinkPanel';
 import type { Cheat } from '../io/cheats';
 import { getRomBytes, setSelectedRom, type RomMeta } from './romStore';
 import { useEmu } from './EmuContext';
@@ -52,6 +53,7 @@ export function PlayerPage() {
   const [showCp, setShowCp] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [showCheats, setShowCheats] = useState(false);
+  const [showLink, setShowLink] = useState(false);
   const [showLog, setShowLog] = useState(false);
   const [showSaveMenu, setShowSaveMenu] = useState(false);
   const [mapVersion, setMapVersion] = useState(0);
@@ -272,6 +274,7 @@ export function PlayerPage() {
           <div className="flex-1" />
           <button onClick={() => setShowCp(true)} className="btn-default">🎮 Controller</button>
           <button onClick={() => setShowCheats(true)} className="btn-default" disabled={!currentRom}>★ Cheats</button>
+          <button onClick={() => setShowLink(true)} className="btn-default" disabled={!currentRom}>🔗 Link</button>
           <button onClick={() => setShowDebug(true)} className="btn-default" disabled={!currentRom}>🔍 Debug</button>
           <button onClick={() => setShowLog(!showLog)} className="btn-default">{showLog ? 'Hide Log' : 'Show Log'}</button>
         </div>
@@ -294,6 +297,7 @@ export function PlayerPage() {
         onChange={() => setMapVersion((v) => v + 1)}
       />
       <DebugPanel open={showDebug} emu={emu} onClose={() => setShowDebug(false)} />
+      <LinkPanel open={showLink} emu={emu} onClose={() => setShowLink(false)} />
       <CheatsPanel
         open={showCheats}
         gameCode={currentRom?.code ?? null}
