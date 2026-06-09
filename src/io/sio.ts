@@ -48,6 +48,16 @@ export interface LinkTransport {
   // slave should return true. Affects SIOCNT.SI (bit 2, slave
   // indicator) and the multi-player ID in bits 4-5.
   isMaster(): boolean;
+
+  // Phase B-2 lockstep hook. When the local Sio kicks off a Multi-
+  // play transfer as master, it calls requestMultiplay to ask the
+  // peer for a synchronized response. The transport returns true if
+  // it took the request (the callback will be invoked when the peer
+  // responds or the transport gives up); false / undefined → Sio
+  // falls back to the synchronous multiplayExchange path. The
+  // callback may be invoked synchronously (LocalLoopback) or async
+  // (WebSocket round-trip).
+  requestMultiplay?(localData: number, onComplete: (r: MultiplayResult) => void): boolean;
 }
 
 export interface SioTraceEntry {
@@ -145,6 +155,11 @@ export class Sio {
   // slave's transfer machinery without the slave's software setting
   // START. Wraps modulo 2^32; remote peer compares unsigned.
   transferSeq = 0;
+
+  // Filled in by the transport's requestMultiplay callback when an
+  // async lockstep response arrives before the cycle budget runs out.
+  // complete() prefers this over the synchronous multiplayExchange.
+  private pendingMulti: MultiplayResult | null = null;
 
   // The transport is swappable at runtime so the UI can switch from
   // "no cable" loopback to a real WebRTC peer without restarting the
@@ -291,6 +306,24 @@ export class Sio {
     } else if (mode === MODE_MULTI) {
       this.cyclesUntilDone = MULTI_CYCLES_BY_BAUD[this.siocnt & 3];
       this.active = true;
+      this.pendingMulti = null;
+      // Lockstep: ask the transport for a synchronized peer response.
+      // If it accepts the request, we'll force-complete the moment
+      // the callback fires (typically before the cycle budget ends),
+      // so the master's perceived transfer time becomes "real RTT to
+      // the slave" instead of the artificial cycle clamp. If the
+      // transport declines (LocalLoopback, or no peer yet), we fall
+      // through and the cycle counter does the work as before.
+      if (this.transport.requestMultiplay) {
+        this.transport.requestMultiplay(this.mltSend, (r) => {
+          // Only honor responses for the still-active transfer; a
+          // late response after a follow-up transfer started would
+          // otherwise overwrite the new one's pending state.
+          if (!this.active || this.activeMode !== MODE_MULTI) return;
+          this.pendingMulti = r;
+          this.cyclesUntilDone = 0;
+        });
+      }
     } else {
       // UART — accepted, but we don't model the byte stream. Clear
       // START immediately so the game's wait loop doesn't hang.
@@ -301,7 +334,10 @@ export class Sio {
   private complete(): void {
     this.active = false;
     if (this.activeMode === MODE_MULTI) {
-      const r = this.transport.multiplayExchange(this.mltSend);
+      // Prefer the lockstep response if it arrived in time; fall back
+      // to the synchronous "latest broadcast value" path otherwise.
+      const r = this.pendingMulti ?? this.transport.multiplayExchange(this.mltSend);
+      this.pendingMulti = null;
       this.multi[0] = r.d0 & 0xFFFF;
       this.multi[1] = r.d1 & 0xFFFF;
       this.multi[2] = r.d2 & 0xFFFF;

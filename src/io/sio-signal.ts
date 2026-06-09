@@ -42,7 +42,16 @@ type StateMsg = {
 };
 
 interface WireMsg {
-  type: 'self' | 'peer-join' | 'peer-leave' | 'state';
+  // self / peer-join / peer-leave are server-emitted room control.
+  // state — periodic SIO state broadcast (used by B-1 fallback path).
+  // mlt-req — master asks slave for a synchronized response to a
+  //   Multi-play transfer that just kicked off. Carries the master's
+  //   SIOMLT_SEND and a unique request id so the response can be
+  //   correlated even if the master fires several transfers in flight.
+  // mlt-resp — slave's reply with the multiplay result both ends will
+  //   adopt. The slave applies the same snapshot to its own Sio at
+  //   send time so the two sides converge.
+  type: 'self' | 'peer-join' | 'peer-leave' | 'state' | 'mlt-req' | 'mlt-resp';
   to?: string;
   from?: string;
   peerId?: string;
@@ -70,6 +79,20 @@ export class SignalTransport implements LinkTransport {
   // snapshot into our Sio and fire SIO IRQ. Tracked unsigned mod 2^32.
   private lastAppliedSeq = 0;
 
+  // Phase B-2 lockstep: pending Multi-play requests we've sent to the
+  // peer, keyed by reqId. The callback runs when the matching mlt-
+  // resp arrives, or when the lockstep timeout expires (whichever
+  // first). The map keeps us correct even if the master fires several
+  // transfers before the first response arrives.
+  private mltReqSeq = 0;
+  private pendingReqs = new Map<number, (r: MultiplayResult) => void>();
+  // Latency ceiling for a lockstep round-trip. If the response hasn't
+  // arrived by then, we drop the request and Sio falls back to the
+  // synchronous broadcast value. Picked at "well above realistic CF
+  // edge RTT but below one second" — anything longer would freeze the
+  // game's transfer loop for noticeably long.
+  private static readonly REQ_TIMEOUT_MS = 250;
+
   onPeerJoin: ((peerId: string) => void) | null = null;
   onPeerLeave: ((peerId: string) => void) | null = null;
   onError: ((err: Error) => void) | null = null;
@@ -89,6 +112,12 @@ export class SignalTransport implements LinkTransport {
   async disconnect(): Promise<void> {
     if (this.tickHandle !== null) { clearInterval(this.tickHandle); this.tickHandle = null; }
     if (this.ws) { try { this.ws.close(); } catch { /* */ } this.ws = null; }
+    // Resolve any pending lockstep requests with the "no-peer" result
+    // so Sio's complete() can finish instead of busy-polling forever.
+    for (const cb of this.pendingReqs.values()) {
+      cb({ d0: 0xFFFF, d1: 0xFFFF, d2: 0xFFFF, d3: 0xFFFF, error: true });
+    }
+    this.pendingReqs.clear();
     this.peerId = null;
     this.peerLatest = { mlt: 0xFFFF, d32lo: 0xFFFF, d32hi: 0xFFFF, d8: 0xFF, seq: 0, m0: 0, m1: 0, m2: 0, m3: 0 };
     this.lastAppliedSeq = 0;
@@ -107,6 +136,38 @@ export class SignalTransport implements LinkTransport {
     return this.peerId !== null;
   }
   isMaster(): boolean { return this.master; }
+
+  requestMultiplay(localData: number, onComplete: (r: MultiplayResult) => void): boolean {
+    // Only master initiates lockstep requests. Slave's Sio shouldn't
+    // be triggering transfers in the first place, but if a game ever
+    // sets START on the slave side we let it fall through to the
+    // sync path rather than spamming our peer with bogus requests.
+    if (!this.master) return false;
+    if (!this.isConnected()) return false;
+    const reqId = ++this.mltReqSeq;
+    let done = false;
+    const settle = (r: MultiplayResult) => {
+      if (done) return;
+      done = true;
+      this.pendingReqs.delete(reqId);
+      onComplete(r);
+    };
+    this.pendingReqs.set(reqId, settle);
+    setTimeout(() => {
+      // Treat timeout as "no peer data" — Sio will fall back to the
+      // multiplayExchange sync path on its next complete().
+      settle({ d0: localData & 0xFFFF, d1: 0xFFFF, d2: 0xFFFF, d3: 0xFFFF, error: true });
+    }, SignalTransport.REQ_TIMEOUT_MS);
+    try {
+      this.ws!.send(JSON.stringify({
+        type: 'mlt-req', to: this.peerId,
+        payload: { reqId, masterData: localData & 0xFFFF },
+      }));
+    } catch {
+      settle({ d0: localData & 0xFFFF, d1: 0xFFFF, d2: 0xFFFF, d3: 0xFFFF, error: true });
+    }
+    return true;
+  }
 
   multiplayExchange(localData: number): MultiplayResult {
     const peer = this.isConnected() ? (this.peerLatest.mlt & 0xFFFF) : 0xFFFF;
@@ -167,6 +228,13 @@ export class SignalTransport implements LinkTransport {
         if (msg.peerId && msg.peerId === this.peerId) {
           this.onPeerLeave?.(msg.peerId);
           this.peerId = null;
+          // Cancel pending lockstep requests so the master's Sio can
+          // unstick. They get the "no peer" result and Sio's complete()
+          // falls back to multiplayExchange's local-loopback shape.
+          for (const cb of this.pendingReqs.values()) {
+            cb({ d0: 0xFFFF, d1: 0xFFFF, d2: 0xFFFF, d3: 0xFFFF, error: true });
+          }
+          this.pendingReqs.clear();
         }
         break;
       case 'state':
@@ -184,6 +252,45 @@ export class SignalTransport implements LinkTransport {
             this.lastAppliedSeq = p.seq;
             this.sio.applyRemoteMultiplay(p.m0, p.m1, p.m2, p.m3, false);
           }
+        }
+        break;
+      case 'mlt-req':
+        // Slave side: master kicked off a Multi-play transfer and is
+        // asking what we'd respond with. Read our *current* SIOMLT_SEND
+        // (not the last broadcast snapshot — that could be 33 ms old),
+        // build the result both ends will adopt, apply it locally so
+        // our SIOMULTI / IRQ converge with master's, and send the
+        // result back so master's complete() can resolve. Master/slave
+        // gating: only the slave honors mlt-req; if we're master and
+        // somehow received one, ignore.
+        if (this.master) break;
+        if (msg.from === this.peerId && msg.payload) {
+          const p = msg.payload as { reqId: number; masterData: number };
+          const slaveData = this.sio.mltSend & 0xFFFF;
+          const result: MultiplayResult = {
+            d0: p.masterData & 0xFFFF,
+            d1: slaveData,
+            d2: 0xFFFF,
+            d3: 0xFFFF,
+            error: false,
+          };
+          // Apply locally before replying so our SIO IRQ on this
+          // transfer fires at the moment of receipt, mirroring how
+          // real hardware's slave latches and IRQs together.
+          this.sio.applyRemoteMultiplay(result.d0, result.d1, result.d2, result.d3, false);
+          try {
+            this.ws!.send(JSON.stringify({
+              type: 'mlt-resp', to: this.peerId,
+              payload: { reqId: p.reqId, result },
+            }));
+          } catch { /* WS may have closed mid-handler */ }
+        }
+        break;
+      case 'mlt-resp':
+        if (msg.from === this.peerId && msg.payload) {
+          const p = msg.payload as { reqId: number; result: MultiplayResult };
+          const cb = this.pendingReqs.get(p.reqId);
+          if (cb) cb(p.result);
         }
         break;
     }
