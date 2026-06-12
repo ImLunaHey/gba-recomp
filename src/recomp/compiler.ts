@@ -1,16 +1,16 @@
 import type { Cpu } from '../cpu/cpu';
 import * as W from './wasm-emit';
 
-// Basic-block THUMB recompiler. Tracks hot PCs; when one crosses the
-// threshold, scan forward emitting WASM ops until we hit a branch or an
-// unsupported instruction, then build/instantiate the module once and
-// keep calling it whenever the dispatcher sees the same PC again. ARM
-// blocks are not jitted in this build — only the much-more-common
-// THUMB path.
+// Basic-block recompiler for both THUMB and ARM. Tracks hot PCs; when
+// one crosses the threshold, scan forward emitting WASM ops until we hit
+// a branch or an unsupported instruction, then build/instantiate the
+// module once and keep calling it whenever the dispatcher sees the same
+// PC again. Blocks are mode-tagged (THUMB vs ARM); see the `enabled`
+// field below for the exact instruction coverage.
 //
 // The compiled function signature is `(unused: i32) -> i32` and it
-// returns the number of THUMB instructions it executed. The host uses
-// that to advance its own instruction-count statistics.
+// returns the number of instructions it executed. The host uses that to
+// advance its own instruction-count statistics.
 //
 // REGISTER + CPSR STATE LIVES IN WASM LINEAR MEMORY.
 //
