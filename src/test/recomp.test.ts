@@ -84,6 +84,71 @@ describe('Recompiler (JIT)', () => {
     expect(emu.cpu.state.r[2]).toBe(0xCAFEBABE);
   });
 
+  it('rotates unaligned word LDR like the interpreter (misalignment 1/2/3)', () => {
+    const base = 0x03004000;
+    for (const mis of [1, 2, 3]) {
+      // Ground truth: same sequence through the interpreter only.
+      const ref = new Emulator();
+      ref.loadRom(new Uint8Array(0x100));
+      const pc = 0x03002000;
+      // LDR R0, [R1, #0]  (encoding: 0110_1_00000_001_000 = 0x6808)
+      placeInsns(ref, pc, [0x6808]);
+      initThumb(ref, pc);
+      ref.bus.write32(base, 0x11223344);
+      ref.cpu.state.r[1] = base + mis;
+      ref.cpu.step();
+
+      // Same thing through the recompiler.
+      const emu = new Emulator();
+      emu.loadRom(new Uint8Array(0x100));
+      emu.recomp.enabled = true;
+      placeInsns(emu, pc, [0x6808]);
+      initThumb(emu, pc);
+      emu.bus.write32(base, 0x11223344);
+      emu.cpu.state.r[1] = base + mis;
+      (emu.recomp as any).hits.set(pc, 1000);
+      expect(emu.recomp.tryDispatch()).toBe(1);
+
+      for (let i = 0; i < 16; i++) {
+        expect(emu.cpu.state.r[i] >>> 0).toBe(ref.cpu.state.r[i] >>> 0);
+      }
+      expect(emu.cpu.state.cpsr >>> 0).toBe(ref.cpu.state.cpsr >>> 0);
+    }
+  });
+
+  it('masks unaligned word STR to the aligned word like the interpreter', () => {
+    const base = 0x03004000;
+    const pc = 0x03002000;
+    // Ground truth: interpreter only.
+    const ref = new Emulator();
+    ref.loadRom(new Uint8Array(0x100));
+    // STR R0, [R1, #0]  (encoding: 0110_0_00000_001_000 = 0x6008)
+    placeInsns(ref, pc, [0x6008]);
+    initThumb(ref, pc);
+    ref.cpu.state.r[0] = 0xDEADBEEF;
+    ref.cpu.state.r[1] = base + 2;               // misaligned by 2
+    ref.cpu.step();
+    expect(ref.bus.read32(base) >>> 0).toBe(0xDEADBEEF);
+
+    // Same thing through the recompiler.
+    const emu = new Emulator();
+    emu.loadRom(new Uint8Array(0x100));
+    emu.recomp.enabled = true;
+    placeInsns(emu, pc, [0x6008]);
+    initThumb(emu, pc);
+    emu.cpu.state.r[0] = 0xDEADBEEF;
+    emu.cpu.state.r[1] = base + 2;
+    (emu.recomp as any).hits.set(pc, 1000);
+    expect(emu.recomp.tryDispatch()).toBe(1);
+    // The write must land at the aligned word, not base+2 / base+4.
+    expect(emu.bus.read32(base) >>> 0).toBe(0xDEADBEEF);
+    expect(emu.bus.read32(base + 4) >>> 0).toBe(ref.bus.read32(base + 4) >>> 0);
+    for (let i = 0; i < 16; i++) {
+      expect(emu.cpu.state.r[i] >>> 0).toBe(ref.cpu.state.r[i] >>> 0);
+    }
+    expect(emu.cpu.state.cpsr >>> 0).toBe(ref.cpu.state.cpsr >>> 0);
+  });
+
   it('bails out and returns false on unsupported instruction at start', () => {
     const emu = new Emulator();
     emu.loadRom(new Uint8Array(0x100));

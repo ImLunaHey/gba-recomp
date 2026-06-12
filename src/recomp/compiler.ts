@@ -181,6 +181,35 @@ export class Recompiler {
       f.i32Store(REG_BASE + rd * 4);
     };
 
+    // Load a word with ARM unaligned-LDR semantics, matching the
+    // interpreter: read32(addr & ~3), then rotate the result right by
+    // (addr & 3) * 8 bits. rotr(v, 0) is a no-op, so the aligned case
+    // needs no branch — the rotate amount is computed unconditionally.
+    // `addrLocal` holds the unmasked address; the rotated word lands in
+    // `destLocal`. Shared by Formats 7/9/11 word loads.
+    const emitLoadWordRotated = (addrLocal: number, destLocal: number) => {
+      // read32(addr & ~3)
+      f.localGet(addrLocal);
+      f.i32Const(~3); f.op(W.OP_I32_AND);
+      f.call(I_r32);
+      // rotr by (addr & 3) << 3
+      f.localGet(addrLocal);
+      f.i32Const(3); f.op(W.OP_I32_AND);
+      f.i32Const(3); f.op(W.OP_I32_SHL);
+      f.op(W.OP_I32_ROTR);
+      f.localSet(destLocal);
+    };
+
+    // Store a word with ARM semantics, matching the interpreter:
+    // write32(addr & ~3, value). `addrLocal` holds the unmasked
+    // address, `valLocal` the value. Shared by word stores.
+    const emitStoreWordMasked = (addrLocal: number, valLocal: number) => {
+      f.localGet(addrLocal);
+      f.i32Const(~3); f.op(W.OP_I32_AND);
+      f.localGet(valLocal);
+      f.call(I_w32);
+    };
+
     // setNZ(value-in-localIdx) — updates the CPSR's N+Z bits in place.
     // Equivalent to CpuState.setNZ.
     const emitSetNZ = (localIdx: number) => {
@@ -387,14 +416,19 @@ export class Recompiler {
         // addr = r[rb] + offset
         pushReg(rb); f.i32Const(offset); f.op(W.OP_I32_ADD); f.localSet(L_TMP);
         if (isLoad) {
-          f.localGet(L_TMP);
-          if (isByte) f.call(I_r8); else f.call(I_r32);
-          f.localSet(L_R);
+          if (isByte) {
+            f.localGet(L_TMP); f.call(I_r8); f.localSet(L_R);
+          } else {
+            emitLoadWordRotated(L_TMP, L_R);
+          }
           storeRegFromLocal(rd, L_R);
         } else {
           pushReg(rd); f.localSet(L_R);
-          f.localGet(L_TMP); f.localGet(L_R);
-          if (isByte) f.call(I_w8); else f.call(I_w32);
+          if (isByte) {
+            f.localGet(L_TMP); f.localGet(L_R); f.call(I_w8);
+          } else {
+            emitStoreWordMasked(L_TMP, L_R);
+          }
         }
         return { ok: true, endsBlock: false };
       }
