@@ -355,9 +355,57 @@ export class BiosHle {
     if (halfBufHas) this.bus.write16(dst, halfBuf);
   }
 
-  // -------- Huffman (best-effort: not used by FireRed core path) --------
+  // -------- Huffman --------
   private huffUnComp(): void {
-    // Minimal stub — FireRed doesn't rely on this for boot.
+    const s = this.cpu.state;
+    const src = s.r[0] >>> 0;
+    let dst = s.r[1] >>> 0;
+    const header = this.bus.read32(src);
+    // Header: bits 0-3 data size in bits (4 or 8), bits 4-7 type (2 =
+    // Huffman), bits 8-31 decompressed size in bytes. If the type nibble
+    // isn't Huffman, bail without touching the destination.
+    if (((header >>> 4) & 0xF) !== 2) return;
+    const dataSize = header & 0xF;
+    let remaining = header >>> 8;
+    // Tree table: size byte at src+4; the tree occupies (treeSize+1)*2
+    // bytes including that byte. Root node is the byte at src+5.
+    const treeSize = this.bus.read8(src + 4);
+    const rootAddr = (src + 5) >>> 0;
+    let bitSrc = (src + 4 + (treeSize + 1) * 2) >>> 0;
+    const symMask = (1 << dataSize) - 1;
+
+    let nodeAddr = rootAddr;
+    let nodeVal = this.bus.read8(nodeAddr);
+    let outBuf = 0, outBits = 0;
+    while (remaining > 0) {
+      // Bitstream is consumed as 32-bit words, MSB first.
+      const word = this.bus.read32(bitSrc); bitSrc = (bitSrc + 4) >>> 0;
+      for (let b = 31; b >= 0 && remaining > 0; b--) {
+        const bit = (word >>> b) & 1;
+        // Node byte: bits 0-5 offset; bit 6 = node1 is data; bit 7 =
+        // node0 is data. Children pair lives at (nodeAddr&~1)+offset*2+2.
+        const isLeaf = (nodeVal & (bit ? 0x40 : 0x80)) !== 0;
+        const childAddr = (((nodeAddr & ~1) >>> 0) + (nodeVal & 0x3F) * 2 + 2 + bit) >>> 0;
+        const childVal = this.bus.read8(childAddr);
+        if (isLeaf) {
+          // Pack symbols LSB-first into 32-bit units; the BIOS writes
+          // the destination in word units only.
+          outBuf |= (childVal & symMask) << outBits;
+          outBits += dataSize;
+          if (outBits >= 32) {
+            this.bus.write32(dst, outBuf >>> 0);
+            dst = (dst + 4) >>> 0;
+            remaining -= 4;
+            outBuf = 0; outBits = 0;
+          }
+          nodeAddr = rootAddr;
+          nodeVal = this.bus.read8(rootAddr);
+        } else {
+          nodeAddr = childAddr;
+          nodeVal = childVal;
+        }
+      }
+    }
   }
 
   // -------- Run-length --------
