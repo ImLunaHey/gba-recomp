@@ -65,6 +65,13 @@ describe('savestate round-trip', () => {
     for (let i = 0; i < 30; i++) emu.runFrame();
 
     const blob = saveState(emu);
+    // Align JIT compile state between the two runs. loadState clears
+    // the recompiler cache (it isn't serialized), so the post-restore
+    // run starts cold; without this, run 1 would run with the cache
+    // warmed by the 30 boot frames and IRQs would be delivered at
+    // different block boundaries — a timing-granularity difference,
+    // not an architectural one. Cold-vs-cold is fully deterministic.
+    emu.recomp.invalidate();
     for (let i = 0; i < 15; i++) emu.runFrame();
     const s1 = snapshot(emu);
 

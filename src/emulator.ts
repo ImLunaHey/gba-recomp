@@ -94,6 +94,10 @@ export class Emulator {
 
   loadRom(bytes: Uint8Array): void {
     this.bus.loadRom(bytes);
+    // Drop any JIT blocks compiled from a previously loaded ROM — the
+    // UI reuses one Emulator instance across ROM loads and restarts,
+    // and cached blocks key on PC, not code bytes.
+    this.recomp.invalidate();
     // Pick the save backend from the ROM's embedded "SRAM_V" /
     // "FLASH_V" / "FLASH1M_V" / "EEPROM_V" signature. Default is
     // 128 KB Flash so unknown ROMs still get something workable.

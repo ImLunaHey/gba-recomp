@@ -44,12 +44,11 @@ export class Recompiler {
   hits = new Map<number, number>();
   jitInsns = 0;
   intInsns = 0;
-  // Opt-in. The linear-memory refactor (see file header) makes the
-  // JIT ~5× faster than the interpreter on a pure ALU+branch micro-
-  // bench, but real-game performance hasn't been re-measured since;
-  // leave the flag off by default until that bake-in is done. Tests
-  // enable it explicitly.
-  enabled = false;
+  // Enabled by default. The JIT covers every THUMB format (1-16, 18,
+  // 19); SWI (format 17) and empty-register-list LDM/STM intentionally
+  // fall back to the interpreter. Set to false on an instance to force
+  // pure-interpreter execution when debugging suspected JIT issues.
+  enabled = true;
 
   // Shared linear memory for all compiled modules. 1 page = 64KB,
   // dwarfs what we use today (68 bytes) but leaves room for future

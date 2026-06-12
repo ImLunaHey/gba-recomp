@@ -496,7 +496,7 @@ function AdvancedView({ emu }: { emu: Emulator }) {
             className="w-4 h-4 accent-[#5060a0]"
           />
           <span>Enable JIT</span>
-          <span className="opacity-50 text-[10px]">experimental — may regress on some games</span>
+          <span className="opacity-50 text-[10px]">on by default — uncheck to debug with the pure interpreter</span>
         </label>
         <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-0.5 font-mono">
           <div className="flex justify-between"><span className="opacity-50">Interpreted insns</span><span>{r.intInsns.toLocaleString()}</span></div>

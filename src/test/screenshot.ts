@@ -21,7 +21,9 @@ if (!romPath) {
 const rom = new Uint8Array(readFileSync(romPath));
 const emu = new Emulator();
 emu.loadRom(rom);
-if (process.env.JIT) emu.recomp.enabled = true;
+// JIT is on by default; JIT=0 or NOJIT=1 forces the pure interpreter
+// (debugging escape hatch).
+if (process.env.JIT === '0' || process.env.NOJIT) emu.recomp.enabled = false;
 
 if (process.env.RRR_TRACE) {
   const orig = emu.cpu.softwareInterrupt.bind(emu.cpu);

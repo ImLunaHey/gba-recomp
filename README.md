@@ -96,8 +96,8 @@ src/
                     (RegisterRamReset, Div, CpuSet, CpuFastSet,
                      LZ77UnComp{Wram,Vram}, BitUnPack, ObjAffineSet,
                      IntrWait, VBlankIntrWait, SoftReset)
-  recomp/           WASM recompiler skeleton (gated off — interpreter
-                    handles everything currently)
+  recomp/           THUMB→WASM basic-block recompiler (enabled by
+                    default; SWI falls back to the interpreter)
   ui/               React + Tailwind UI (Screen, Gamepad, ControllerPanel,
                     RomLibrary, LogPane, audio sink, gamepad polling)
   emulator.ts       Composes all the above; runFrame() runs ~280896
