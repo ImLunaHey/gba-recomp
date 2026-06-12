@@ -13,6 +13,7 @@ import { LinkPanel } from './LinkPanel';
 import { SettingsPanel } from './SettingsPanel';
 import { SaveStatesPanel, captureThumb } from './SaveStatesPanel';
 import { Modal } from './Modal';
+import { usePersistedBool, usePersistedNumber } from './usePersistedState';
 import { putState, getStateBlob } from './stateStore';
 import type { Cheat } from '../io/cheats';
 import { getRomBytes, setSelectedRom, type RomMeta } from './romStore';
@@ -85,46 +86,22 @@ export function PlayerPage() {
   const [speed, setSpeed] = useState(1);
   const [turbo, setTurbo] = useState(false);
   const effectiveSpeed = turbo ? Math.max(4, speed) : speed;
-  const [smooth, setSmooth] = useState(() => {
-    try { return localStorage.getItem('gba-recomp:smooth') === '1'; } catch { return false; }
-  });
-  const changeSmooth = (v: boolean) => {
-    setSmooth(v);
-    try { localStorage.setItem('gba-recomp:smooth', v ? '1' : '0'); } catch { /* ignore */ }
-  };
-  const [crt, setCrt] = useState(() => {
-    try { return localStorage.getItem('gba-recomp:crt') === '1'; } catch { return false; }
-  });
-  const changeCrt = (v: boolean) => {
-    setCrt(v);
-    try { localStorage.setItem('gba-recomp:crt', v ? '1' : '0'); } catch { /* ignore */ }
-  };
-  const [colorCorrect, setColorCorrect] = useState(() => {
-    try { return localStorage.getItem('gba-recomp:colorcorrect') === '1'; } catch { return false; }
-  });
-  const changeColorCorrect = (v: boolean) => {
-    setColorCorrect(v);
-    try { localStorage.setItem('gba-recomp:colorcorrect', v ? '1' : '0'); } catch { /* ignore */ }
-  };
+  // Persisted video/feature settings (localStorage-backed via the hook).
+  const [smooth, changeSmooth] = usePersistedBool('gba-recomp:smooth', false);
+  const [crt, changeCrt] = usePersistedBool('gba-recomp:crt', false);
+  const [colorCorrect, changeColorCorrect] = usePersistedBool('gba-recomp:colorcorrect', false);
+  const [autoResumeOn, changeAutoResume] = usePersistedBool('gba-recomp:autoresume', false);
+  // Turbo/autofire: bitmask of GBA keys that auto-fire while held.
+  const [turboMask, changeTurbo] = usePersistedNumber('gba-recomp:turbo', 0);
+  useEffect(() => { emu.keypad.turboMask = turboMask; }, [emu, turboMask]);
   // Rewind: opt-in ring of recent savestates the user can scrub back
-  // through. rewinding pauses the forward loop and drives frames from
-  // the buffer instead.
-  const [rewindOn, setRewindOn] = useState(() => {
-    try { return localStorage.getItem('gba-recomp:rewind') === '1'; } catch { return false; }
-  });
+  // through. rewinding pauses the forward loop and drives frames from it.
+  const [rewindOn, setRewindOn] = usePersistedBool('gba-recomp:rewind', false);
   const rewindBufRef = useRef<Uint8Array[]>([]);
   const [rewinding, setRewinding] = useState(false);
   const changeRewind = (v: boolean) => {
     setRewindOn(v);
     if (!v) { rewindBufRef.current = []; setRewinding(false); }
-    try { localStorage.setItem('gba-recomp:rewind', v ? '1' : '0'); } catch { /* ignore */ }
-  };
-  const [autoResumeOn, setAutoResumeOn] = useState(() => {
-    try { return localStorage.getItem('gba-recomp:autoresume') === '1'; } catch { return false; }
-  });
-  const changeAutoResume = (v: boolean) => {
-    setAutoResumeOn(v);
-    try { localStorage.setItem('gba-recomp:autoresume', v ? '1' : '0'); } catch { /* ignore */ }
   };
   const effectivePaused = paused || rewinding;
   const [mapVersion, setMapVersion] = useState(0);
@@ -786,6 +763,8 @@ export function PlayerPage() {
         onCrtChange={changeCrt}
         colorCorrect={colorCorrect}
         onColorCorrectChange={changeColorCorrect}
+        turboMask={turboMask}
+        onTurboChange={changeTurbo}
         rewind={rewindOn}
         onRewindChange={changeRewind}
         autoResume={autoResumeOn}

@@ -132,6 +132,7 @@ export class Emulator {
   // Run a full GBA frame worth of cycles (~280896). Returns insn counts
   // for the UI's stat readout.
   runFrame(): { interp: number; jit: number; frames: number } {
+    this.keypad.tickTurbo();   // advance autofire phase once per frame
     let executed = 0;
     const jitStart = this.recomp.jitInsns;
     const intStart = this.recomp.intInsns;

@@ -2,6 +2,15 @@ import { useState } from 'react';
 import { Modal } from './Modal';
 import type { AudioSink } from './audio';
 import { haptics } from './haptics';
+import { Key } from '../io/keypad';
+
+// Buttons offered for autofire (the ones it actually makes sense on).
+const TURBO_KEYS: Array<{ key: Key; label: string }> = [
+  { key: Key.A, label: 'A' },
+  { key: Key.B, label: 'B' },
+  { key: Key.L, label: 'L' },
+  { key: Key.R, label: 'R' },
+];
 
 interface Props {
   open: boolean;
@@ -15,6 +24,8 @@ interface Props {
   onCrtChange: (v: boolean) => void;
   colorCorrect: boolean;
   onColorCorrectChange: (v: boolean) => void;
+  turboMask: number;
+  onTurboChange: (mask: number) => void;
   rewind: boolean;
   onRewindChange: (v: boolean) => void;
   autoResume: boolean;
@@ -25,7 +36,7 @@ interface Props {
 // is muted by the Screen loop above 1× to avoid buffer thrash).
 const SPEEDS = [0.5, 1, 2, 4];
 
-export function SettingsPanel({ open, onClose, audio, speed, onSpeedChange, smooth, onSmoothChange, crt, onCrtChange, colorCorrect, onColorCorrectChange, rewind, onRewindChange, autoResume, onAutoResumeChange }: Props) {
+export function SettingsPanel({ open, onClose, audio, speed, onSpeedChange, smooth, onSmoothChange, crt, onCrtChange, colorCorrect, onColorCorrectChange, turboMask, onTurboChange, rewind, onRewindChange, autoResume, onAutoResumeChange }: Props) {
   // Mirror the sink's persisted values into local state so the slider
   // re-renders; the sink remains the source of truth.
   const [vol, setVol] = useState(audio.volume);
@@ -139,6 +150,27 @@ export function SettingsPanel({ open, onClose, audio, speed, onSpeedChange, smoo
             </label>
           </section>
         )}
+
+        {/* Turbo / autofire */}
+        <section>
+          <div className="eyebrow mb-2">Turbo / autofire</div>
+          <div className="flex flex-wrap gap-2">
+            {TURBO_KEYS.map(({ key, label }) => {
+              const on = (turboMask & (1 << key)) !== 0;
+              return (
+                <button
+                  key={key}
+                  onClick={() => onTurboChange(on ? turboMask & ~(1 << key) : turboMask | (1 << key))}
+                  className={on ? 'btn btn-primary' : 'btn'}
+                >{label}</button>
+              );
+            })}
+          </div>
+          <div className="text-[10px] opacity-50 mt-2 leading-relaxed">
+            Selected buttons auto-fire (~30 Hz) while held — on the gamepad,
+            keyboard, or on-screen pad.
+          </div>
+        </section>
 
         {/* Rewind */}
         <section>

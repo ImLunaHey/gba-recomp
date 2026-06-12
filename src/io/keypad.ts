@@ -12,11 +12,25 @@ export enum Key {
 }
 
 export class Keypad {
-  // Live bitmask of pressed keys (1 = pressed). We invert on read to match
-  // the GBA's "released" polarity.
+  // Logical held bitmask (1 = held). Inverted on read to match the GBA's
+  // "released" polarity. The UI highlight reads this directly so a held
+  // turbo button stays lit even while it autofires.
   pressed = 0;
+  // Keys that autofire while held: the game sees them pressed only on the
+  // "on" phase, which tickTurbo() flips once per emulated frame (~30 Hz).
+  turboMask = 0;
+  private turboPhase = 0;
 
   press(k: Key) { this.pressed |= 1 << k; }
   release(k: Key) { this.pressed &= ~(1 << k); }
-  read16(): number { return (~this.pressed) & 0x3FF; }
+
+  // Advance the autofire phase — call once per emulated frame.
+  tickTurbo() { this.turboPhase ^= 1; }
+
+  read16(): number {
+    let effective = this.pressed;
+    // On the "off" phase, drop the held turbo keys so they read released.
+    if (this.turboMask && this.turboPhase === 0) effective &= ~this.turboMask;
+    return (~effective) & 0x3FF;
+  }
 }
