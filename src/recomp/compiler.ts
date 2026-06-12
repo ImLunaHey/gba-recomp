@@ -286,6 +286,44 @@ export class Recompiler {
       f.i32Store(CPSR_OFF);
     };
 
+    // Like emitSetFlagsAdd/Sub but the C flag comes pre-computed (0/1)
+    // in local `lC` — used by ADC/SBC whose carry isn't a simple
+    // unsigned compare of a/b/r. `subForm` selects the V formula:
+    //   add form: (~(a^b) & (a^r))    sub form: ((a^b) & (a^r))
+    const emitSetFlagsCarryLocal = (lA: number, lB: number, lR: number, lC: number, subForm: boolean) => {
+      f.i32Const(0);                          // addr for store
+      f.i32Const(0); f.i32Load(CPSR_OFF);
+      f.i32Const(0x0FFFFFFF); f.op(W.OP_I32_AND);   // clear N+Z+C+V
+      // N: r & 0x80000000
+      f.localGet(lR);
+      f.i32Const(0x80000000 | 0); f.op(W.OP_I32_AND);
+      // Z: (r == 0) << 30
+      f.localGet(lR); f.op(W.OP_I32_EQZ);
+      f.i32Const(30); f.op(W.OP_I32_SHL);
+      f.op(W.OP_I32_OR);                            // N|Z
+      // C: precomputed 0/1 in lC, << 29
+      f.localGet(lC);
+      f.i32Const(29); f.op(W.OP_I32_SHL);
+      f.op(W.OP_I32_OR);                            // N|Z|C
+      // V: ((~)?(a^b) & (a^r)) sign bit → bit 28
+      f.localGet(lA); f.localGet(lB); f.op(W.OP_I32_XOR);
+      if (!subForm) { f.i32Const(-1); f.op(W.OP_I32_XOR); }  // ~(a^b)
+      f.localGet(lA); f.localGet(lR); f.op(W.OP_I32_XOR);
+      f.op(W.OP_I32_AND);
+      f.i32Const(0x80000000 | 0); f.op(W.OP_I32_AND);
+      f.i32Const(3); f.op(W.OP_I32_SHR_U);
+      f.op(W.OP_I32_OR);                            // N|Z|C|V
+      f.op(W.OP_I32_OR);                            // | masked CPSR
+      f.i32Store(CPSR_OFF);
+    };
+
+    // Push CPSR's C bit (0/1) onto the stack.
+    const pushCarryIn = () => {
+      f.i32Const(0); f.i32Load(CPSR_OFF);
+      f.i32Const(29); f.op(W.OP_I32_SHR_U);
+      f.i32Const(1); f.op(W.OP_I32_AND);
+    };
+
     // Push 0 or 1 (the condition result) onto the stack. `cond` is
     // known at compile time so we hardcode the bit-test pattern.
     const emitCheckCond = (cond: number) => {
@@ -327,6 +365,26 @@ export class Recompiler {
 
     const translate = (insn: number): { ok: true; endsBlock: boolean } | { ok: false } => {
       const top3 = insn >>> 13;
+
+      // -------- Format 2: ADD/SUB Rd, Rs, Rn / #imm3
+      // top3 == 0b000 with bits 12:11 == 11 (Format 1's shift ops live
+      // in the other three op slots).
+      if ((insn & 0xF800) === 0x1800) {
+        const I    = (insn & 0x0400) !== 0;
+        const sub  = (insn & 0x0200) !== 0;
+        const rnRm = (insn >>> 6) & 7;
+        const rs   = (insn >>> 3) & 7;
+        const rd   = insn & 7;
+        pushReg(rs); f.localSet(L_A);
+        if (I) f.i32Const(rnRm); else pushReg(rnRm);
+        f.localSet(L_B);
+        f.localGet(L_A); f.localGet(L_B);
+        f.op(sub ? W.OP_I32_SUB : W.OP_I32_ADD); f.localSet(L_R);
+        storeRegFromLocal(rd, L_R);
+        if (sub) emitSetFlagsSub(L_A, L_B, L_R);
+        else     emitSetFlagsAdd(L_A, L_B, L_R);
+        return { ok: true, endsBlock: false };
+      }
 
       // -------- Format 3: MOV/CMP/ADD/SUB Rd, #imm8
       if (top3 === 0b001) {
@@ -380,9 +438,60 @@ export class Recompiler {
             storeRegFromLocal(rd, L_R);
             emitSetNZ(L_R);
             return { ok: true, endsBlock: false };
+          // 0x2/0x3/0x4/0x7 (register shifts) intentionally unhandled —
+          // they fall through to the `return { ok: false }` below.
+          case 0x5: // ADC: r = a + b + cIn
+            pushCarryIn(); f.localSet(L_TMP2);
+            // t = a + b
+            f.localGet(L_A); f.localGet(L_B); f.op(W.OP_I32_ADD); f.localSet(L_TMP);
+            // r = t + cIn
+            f.localGet(L_TMP); f.localGet(L_TMP2); f.op(W.OP_I32_ADD); f.localSet(L_R);
+            // C = carry out of the 33-bit sum: (t <u a) | (r <u t)
+            f.localGet(L_TMP); f.localGet(L_A); f.op(W.OP_I32_LT_U);
+            f.localGet(L_R); f.localGet(L_TMP); f.op(W.OP_I32_LT_U);
+            f.op(W.OP_I32_OR); f.localSet(L_TMP2);
+            storeRegFromLocal(rd, L_R);
+            emitSetFlagsCarryLocal(L_A, L_B, L_R, L_TMP2, false);
+            return { ok: true, endsBlock: false };
+          case 0x6: // SBC: r = a - b - (cIn ^ 1)
+            pushCarryIn(); f.localSet(L_TMP2);
+            // C = (a >u b) | ((a == b) & cIn) — branch-free form of the
+            // interpreter's `a >= b + notC` (exact arithmetic).
+            // Computed before r so cIn (L_TMP2) is still live.
+            f.localGet(L_A); f.localGet(L_B); f.op(W.OP_I32_GT_U);
+            f.localGet(L_A); f.localGet(L_B); f.op(W.OP_I32_EQ);
+            f.localGet(L_TMP2); f.op(W.OP_I32_AND);
+            f.op(W.OP_I32_OR); f.localSet(L_TMP);
+            // r = a - b + cIn - 1
+            f.localGet(L_A); f.localGet(L_B); f.op(W.OP_I32_SUB);
+            f.localGet(L_TMP2); f.op(W.OP_I32_ADD);
+            f.i32Const(1); f.op(W.OP_I32_SUB);
+            f.localSet(L_R);
+            storeRegFromLocal(rd, L_R);
+            emitSetFlagsCarryLocal(L_A, L_B, L_R, L_TMP, true);
+            return { ok: true, endsBlock: false };
+          case 0x8: // TST: AND, flags only
+            f.localGet(L_A); f.localGet(L_B); f.op(W.OP_I32_AND); f.localSet(L_R);
+            emitSetNZ(L_R);
+            return { ok: true, endsBlock: false };
+          case 0x9: // NEG: r = 0 - b
+            f.i32Const(0); f.localSet(L_A);
+            f.localGet(L_A); f.localGet(L_B); f.op(W.OP_I32_SUB); f.localSet(L_R);
+            storeRegFromLocal(rd, L_R);
+            emitSetFlagsSub(L_A, L_B, L_R);
+            return { ok: true, endsBlock: false };
           case 0xA: // CMP
             f.localGet(L_A); f.localGet(L_B); f.op(W.OP_I32_SUB); f.localSet(L_R);
             emitSetFlagsSub(L_A, L_B, L_R);
+            return { ok: true, endsBlock: false };
+          case 0xB: // CMN: add, flags only
+            f.localGet(L_A); f.localGet(L_B); f.op(W.OP_I32_ADD); f.localSet(L_R);
+            emitSetFlagsAdd(L_A, L_B, L_R);
+            return { ok: true, endsBlock: false };
+          case 0xD: // MUL — interpreter only touches N+Z, so setNZ only
+            f.localGet(L_A); f.localGet(L_B); f.op(W.OP_I32_MUL); f.localSet(L_R);
+            storeRegFromLocal(rd, L_R);
+            emitSetNZ(L_R);
             return { ok: true, endsBlock: false };
           case 0xC: // ORR
             f.localGet(L_A); f.localGet(L_B); f.op(W.OP_I32_OR); f.localSet(L_R);
@@ -430,6 +539,35 @@ export class Recompiler {
             emitStoreWordMasked(L_TMP, L_R);
           }
         }
+        return { ok: true, endsBlock: false };
+      }
+
+      // -------- Format 12: load address (ADD Rd, PC/SP, #imm8*4)
+      if ((insn & 0xF000) === 0xA000) {
+        const SP  = (insn & 0x0800) !== 0;
+        const rd  = (insn >>> 8) & 7;
+        const imm = (insn & 0xFF) << 2;
+        if (SP) {
+          // r[rd] = r13 + imm. No flags.
+          pushReg(13); f.i32Const(imm); f.op(W.OP_I32_ADD); f.localSet(L_R);
+          storeRegFromLocal(rd, L_R);
+        } else {
+          // r[rd] = (arch PC & ~3) + imm — pure compile-time constant
+          // (arch PC = pc + 4).
+          storeRegConst(rd, (((pc + 4) & ~3) + imm) >>> 0);
+        }
+        return { ok: true, endsBlock: false };
+      }
+
+      // -------- Format 13: ADD SP, #±imm7*4
+      // Exact-match 0xB0xx only — 0xB4/0xB5/0xBC/0xBD are Format 14
+      // PUSH/POP, which stay unsupported here.
+      if ((insn & 0xFF00) === 0xB000) {
+        const imm = (insn & 0x7F) << 2;
+        pushReg(13); f.i32Const(imm);
+        f.op((insn & 0x80) ? W.OP_I32_SUB : W.OP_I32_ADD);
+        f.localSet(L_R);
+        storeRegFromLocal(13, L_R);
         return { ok: true, endsBlock: false };
       }
 

@@ -18,6 +18,34 @@ function initThumb(emu: Emulator, startPc: number) {
   emu.cpu.state.r[13] = 0x03007F00;            // SP
 }
 
+// Differential harness: run `insns` through a JIT-forced emulator and
+// a pure-interpreter emulator, then compare ALL of r0..r15 + cpsr.
+// `setup` runs on both instances before execution (set registers etc.).
+function runDiff(insns: number[], setup?: (emu: Emulator) => void) {
+  const pc = 0x03002000;
+
+  const ref = new Emulator();
+  ref.loadRom(new Uint8Array(0x100));
+  placeInsns(ref, pc, insns);
+  initThumb(ref, pc);
+  setup?.(ref);
+  for (let i = 0; i < insns.length; i++) ref.cpu.step();
+
+  const emu = new Emulator();
+  emu.loadRom(new Uint8Array(0x100));
+  emu.recomp.enabled = true;
+  placeInsns(emu, pc, insns);
+  initThumb(emu, pc);
+  setup?.(emu);
+  (emu.recomp as any).hits.set(pc, 1000);
+  expect(emu.recomp.tryDispatch(), 'block must compile fully').toBe(insns.length);
+
+  for (let i = 0; i < 16; i++) {
+    expect(emu.cpu.state.r[i] >>> 0, `r${i}`).toBe(ref.cpu.state.r[i] >>> 0);
+  }
+  expect(emu.cpu.state.cpsr >>> 0, 'cpsr').toBe(ref.cpu.state.cpsr >>> 0);
+}
+
 describe('Recompiler (JIT)', () => {
   it('compiles Format 3 MOV/ADD/SUB sequence and matches interpreter', () => {
     const interpResult = (() => {
@@ -147,6 +175,116 @@ describe('Recompiler (JIT)', () => {
       expect(emu.cpu.state.r[i] >>> 0).toBe(ref.cpu.state.r[i] >>> 0);
     }
     expect(emu.cpu.state.cpsr >>> 0).toBe(ref.cpu.state.cpsr >>> 0);
+  });
+
+  it('Format 2 ADD/SUB register matches interpreter at carry/overflow edges', () => {
+    // ADD R2, R0, R1 = 0x1842 ; SUB R2, R0, R1 = 0x1A42
+    const pairs: [number, number][] = [
+      [10, 3],
+      [0xFFFFFFFF, 1],          // ADD: carry + zero; SUB: no borrow
+      [0x7FFFFFFF, 1],          // ADD: signed overflow
+      [0, 1],                   // SUB: borrow
+      [0x80000000, 1],          // SUB: signed overflow
+      [0xFFFFFFFF, 0xFFFFFFFF], // SUB: a==b → zero, carry
+    ];
+    for (const [a, b] of pairs) {
+      for (const insn of [0x1842, 0x1A42]) {
+        runDiff([insn], (e) => { e.cpu.state.r[0] = a; e.cpu.state.r[1] = b; });
+      }
+    }
+  });
+
+  it('Format 2 ADD/SUB imm3 matches interpreter at carry/overflow edges', () => {
+    // ADD R2, R0, #3 = 0x1CC2 ; SUB R2, R0, #7 = 0x1FC2
+    for (const a of [0, 5, 0xFFFFFFFF, 0xFFFFFFFD, 0x7FFFFFFF, 0x7FFFFFFD, 0x80000002, 7, 3]) {
+      runDiff([0x1CC2], (e) => { e.cpu.state.r[0] = a; });
+      runDiff([0x1FC2], (e) => { e.cpu.state.r[0] = a; });
+    }
+  });
+
+  it('Format 4 ADC matches interpreter with C in both states', () => {
+    // CMP R2, #0 (0x2A00) with r2=0 sets C; CMP R2, #1 (0x2A01) clears C.
+    // ADC R0, R1 = 0x4148.
+    const pairs: [number, number][] = [
+      [10, 3],
+      [0xFFFFFFFE, 1],          // a+b = 0xFFFFFFFF: cIn=1 wraps to 0 (carry-chain edge)
+      [0xFFFFFFFF, 0],          // same edge, asymmetric operands
+      [0xFFFFFFFF, 0xFFFFFFFF], // carry from the first add alone
+      [0x7FFFFFFF, 0],          // cIn=1 → signed overflow
+      [0x7FFFFFFE, 1],
+      [0, 0],
+    ];
+    for (const [a, b] of pairs) {
+      for (const setC of [0x2A00, 0x2A01]) {
+        runDiff([setC, 0x4148], (e) => {
+          e.cpu.state.r[0] = a; e.cpu.state.r[1] = b; e.cpu.state.r[2] = 0;
+        });
+      }
+    }
+  });
+
+  it('Format 4 SBC matches interpreter with C in both states', () => {
+    // SBC R0, R1 = 0x4188.
+    const pairs: [number, number][] = [
+      [10, 3],
+      [5, 5],                   // a==b: cIn=1 → 0/C=1; cIn=0 → -1/C=0
+      [0, 0],
+      [3, 10],                  // borrow
+      [0, 0xFFFFFFFF],          // b+notC can exceed 32 bits
+      [0xFFFFFFFF, 0xFFFFFFFF],
+      [0x80000000, 1],          // signed overflow
+    ];
+    for (const [a, b] of pairs) {
+      for (const setC of [0x2A00, 0x2A01]) {
+        runDiff([setC, 0x4188], (e) => {
+          e.cpu.state.r[0] = a; e.cpu.state.r[1] = b; e.cpu.state.r[2] = 0;
+        });
+      }
+    }
+  });
+
+  it('Format 4 TST/NEG/CMN/MUL match interpreter flags', () => {
+    // TST R0, R1 = 0x4208 ; NEG R0, R1 = 0x4248
+    // CMN R0, R1 = 0x42C8 ; MUL R0, R1 = 0x4348
+    const pairs: [number, number][] = [
+      [0xF0F0F0F0, 0x0F0F0F0F], // TST → zero
+      [0x80000000, 0x80000000], // TST → negative; CMN carry+overflow
+      [0, 0],                   // NEG of 0 → zero/carry
+      [0, 0x80000000],          // NEG of INT_MIN → overflow
+      [0, 1],                   // NEG → negative w/ borrow
+      [0xFFFFFFFF, 1],          // CMN → zero + carry
+      [0x7FFFFFFF, 1],          // CMN → signed overflow
+      [0x10000, 0x10000],       // MUL → wraps to 0
+      [0xFFFFFFFF, 3],          // MUL → negative result
+      [1234, 5678],
+    ];
+    for (const [a, b] of pairs) {
+      for (const insn of [0x4208, 0x4248, 0x42C8, 0x4348]) {
+        runDiff([insn], (e) => { e.cpu.state.r[0] = a; e.cpu.state.r[1] = b; });
+      }
+    }
+  });
+
+  it('Format 12 load address matches interpreter (PC and SP variants)', () => {
+    // ADD R0, PC, #20 = 0xA005 ; ADD R1, SP, #32 = 0xA908
+    runDiff([0xA005]);
+    runDiff([0xA908]);
+    // Both in one block — the PC variant's constant must track the
+    // per-instruction decode address, not the block start.
+    runDiff([0xA908, 0xA005, 0xA1FF]);  // ADD R1,PC,#1020 as the 3rd insn
+    // SP variant with a funky (misaligned) SP value.
+    runDiff([0xA908], (e) => { e.cpu.state.r[13] = 0x03007F02; });
+  });
+
+  it('Format 13 ADD/SUB SP matches interpreter', () => {
+    // ADD SP, #40 = 0xB00A ; SUB SP, #40 = 0xB08A
+    runDiff([0xB00A]);
+    runDiff([0xB08A]);
+    runDiff([0xB07F]);                  // max positive: +508
+    runDiff([0xB0FF]);                  // max negative: -508
+    runDiff([0xB00A, 0xB08A]);          // net zero round-trip
+    // Wrap-around edge.
+    runDiff([0xB08A], (e) => { e.cpu.state.r[13] = 4; });
   });
 
   it('bails out and returns false on unsupported instruction at start', () => {
