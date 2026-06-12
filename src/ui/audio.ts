@@ -13,10 +13,42 @@
 const TARGET_AHEAD_S = 0.06;   // 60ms of buffered audio ahead of playback
 const MAX_AHEAD_S = 0.15;      // drop the queue if we get too far ahead
 
+const VOL_KEY = 'gba-recomp:volume';
+const MUTE_KEY = 'gba-recomp:muted';
+
 export class AudioSink {
   ctx: AudioContext | null = null;
   gain: GainNode | null = null;
   nextStart = 0;
+  // Volume is the user-facing 0..1 level; muted overrides it to 0
+  // without losing the stored level. Both persist across sessions.
+  volume = 0.6;
+  muted = false;
+
+  constructor() {
+    try {
+      const v = localStorage.getItem(VOL_KEY);
+      if (v !== null) this.volume = Math.max(0, Math.min(1, parseFloat(v)));
+      this.muted = localStorage.getItem(MUTE_KEY) === '1';
+    } catch { /* no localStorage — keep defaults */ }
+  }
+
+  // Effective gain applied to the GainNode.
+  private effectiveGain(): number {
+    return this.muted ? 0 : this.volume;
+  }
+
+  setVolume(v: number): void {
+    this.volume = Math.max(0, Math.min(1, v));
+    if (this.gain) this.gain.gain.value = this.effectiveGain();
+    try { localStorage.setItem(VOL_KEY, String(this.volume)); } catch { /* ignore */ }
+  }
+
+  setMuted(m: boolean): void {
+    this.muted = m;
+    if (this.gain) this.gain.gain.value = this.effectiveGain();
+    try { localStorage.setItem(MUTE_KEY, m ? '1' : '0'); } catch { /* ignore */ }
+  }
 
   ensure(): AudioContext | null {
     if (this.ctx) return this.ctx;
@@ -24,7 +56,7 @@ export class AudioSink {
     try {
       this.ctx = new AudioContext({ sampleRate: 44100 });
       this.gain = this.ctx.createGain();
-      this.gain.gain.value = 0.6;
+      this.gain.gain.value = this.effectiveGain();
       this.gain.connect(this.ctx.destination);
       this.nextStart = this.ctx.currentTime + TARGET_AHEAD_S;
     } catch {

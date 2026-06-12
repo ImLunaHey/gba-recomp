@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { Modal } from './Modal';
 
 // Reusable confirm dialog. Replaces window.confirm() so we get a
 // themed dark UI + the modal closes cleanly on Esc / backdrop click
@@ -25,37 +26,25 @@ export function ConfirmModal({
   onConfirm,
   onCancel,
 }: Props) {
+  // Modal handles Esc; we add Enter = confirm on top.
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
-      if (e.key === 'Enter') onConfirm();
-    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Enter') onConfirm(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onCancel, onConfirm]);
-  if (!open) return null;
+  }, [open, onConfirm]);
   return (
-    <div
-      className="fixed inset-0 bg-black/70 flex items-center justify-center z-[2000]"
-      onClick={onCancel}
-    >
-      <div
-        className="bg-[#14141a] border border-[#2a2a30] rounded-lg p-5 w-full max-w-[420px] mx-3 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="text-sm font-bold mb-2">{title}</div>
-        <div className="text-xs opacity-80 mb-4 whitespace-pre-line">{message}</div>
-        <div className="flex justify-end gap-2">
-          <button onClick={onCancel} className="btn-default !text-[11px]">{cancelLabel}</button>
-          <button
-            onClick={onConfirm}
-            className={`btn-default !text-[11px] ${danger ? '!text-red-300 hover:!bg-red-900/30' : ''}`}
-            autoFocus
-          >{confirmLabel}</button>
-        </div>
+    <Modal open={open} onClose={onCancel} title={title} size="sm" scrollBody={false}>
+      <div className="text-xs opacity-80 mb-5 whitespace-pre-line leading-relaxed">{message}</div>
+      <div className="flex justify-end gap-2">
+        <button onClick={onCancel} className="btn">{cancelLabel}</button>
+        <button
+          onClick={onConfirm}
+          className={danger ? 'btn btn-danger' : 'btn btn-primary'}
+          autoFocus
+        >{confirmLabel}</button>
       </div>
-    </div>
+    </Modal>
   );
 }
 

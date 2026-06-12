@@ -47,12 +47,17 @@ export function CoverCard({ rom, selectMode, selected, onActivate, onDelete }: P
       }`}
       onClick={onActivate}
     >
-      <div className="relative">
+      <div className="relative rounded-md overflow-hidden">
         <CoverImage
           title={displayName}
           subtitle={year || rom.code}
           thumbnails={candidates}
         />
+        {!selectMode && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+            <span className="grid place-items-center w-10 h-10 rounded-full bg-[var(--color-accent)] text-[#052436] text-base shadow-lg">▶</span>
+          </div>
+        )}
         {selectMode && (
           <input
             type="checkbox"

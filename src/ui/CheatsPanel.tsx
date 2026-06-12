@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Cheat } from '../io/cheats';
 import { parseCheat } from '../io/cheats';
 import { ErrorBoundary } from './ErrorBoundary';
+import { Modal } from './Modal';
 
 interface Props {
   open: boolean;
@@ -31,9 +32,12 @@ export function saveCheatsFor(code: string, cheats: Cheat[]): void {
 export function CheatsPanel({ open, gameCode, cheats, onChange, onClose }: Props) {
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState<Cheat>({ name: '', code: '', enabled: true });
+  // Index pending a two-step delete confirm (avoids a nested modal +
+  // its Esc-handling clash with this panel's own Esc-to-close).
+  const [confirmDel, setConfirmDel] = useState<number | null>(null);
 
   // Reset the draft / editor whenever the user navigates between games.
-  useEffect(() => { setEditing(null); }, [gameCode]);
+  useEffect(() => { setEditing(null); setConfirmDel(null); }, [gameCode]);
 
   const persist = (next: Cheat[]) => {
     onChange(next);
@@ -65,12 +69,10 @@ export function CheatsPanel({ open, gameCode, cheats, onChange, onClose }: Props
     persist(cheats.map((c, j) => (j === i ? { ...c, enabled: !c.enabled } : c)));
   };
   const remove = (i: number) => {
-    if (!confirm(`Delete cheat "${cheats[i].name}"?`)) return;
     persist(cheats.filter((_, j) => j !== i));
+    setConfirmDel(null);
     if (editing === i) cancelEdit();
   };
-
-  if (!open) return null;
 
   // Parse the current draft so we can warn about syntax problems before
   // the user saves a code that does nothing.
@@ -79,22 +81,13 @@ export function CheatsPanel({ open, gameCode, cheats, onChange, onClose }: Props
   const unsupportedLines = draftParsed.filter((l) => l.type === 'unsupported').length;
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[1000]" onClick={onClose}>
-      <div
-        className="bg-[#14141a] border border-[#2a2a30] rounded-lg p-4 w-full max-w-[680px] mx-2 max-h-[88vh] overflow-y-auto shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex justify-between items-center mb-3 pb-2 border-b border-[#2a2a30]">
-          <div>
-            <div className="text-sm font-bold tracking-wider">Cheats</div>
-            <div className="text-[10px] opacity-50 mt-0.5">
-              {gameCode ? `game code ${gameCode}` : 'no ROM loaded'}
-            </div>
-          </div>
-          <button onClick={onClose} className="bg-transparent border-0 text-[#d8d8e0] text-lg cursor-pointer px-2 hover:text-white">×</button>
-        </div>
-
-        <ErrorBoundary label="Cheats" onClose={onClose} variant="inline">
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Cheats"
+      subtitle={gameCode ? `game code ${gameCode}` : 'no ROM loaded'}
+    >
+      <ErrorBoundary label="Cheats" onClose={onClose} variant="inline">
         {!gameCode ? (
           <div className="py-8 text-center opacity-50 text-xs">
             Load a ROM to manage its cheats.
@@ -128,34 +121,43 @@ export function CheatsPanel({ open, gameCode, cheats, onChange, onClose }: Props
                       onClick={() => startEdit(i)}
                       className="bg-transparent border-0 text-[#9a9aa6] text-xs cursor-pointer px-2 hover:text-white"
                     >Edit</button>
-                    <button
-                      onClick={() => remove(i)}
-                      className="bg-transparent border-0 text-[#9a9aa6] text-sm cursor-pointer px-2 hover:text-red-400"
-                      title="Remove cheat"
-                    >🗑</button>
+                    {confirmDel === i ? (
+                      <button
+                        onClick={() => remove(i)}
+                        onMouseLeave={() => setConfirmDel(null)}
+                        className="bg-transparent border-0 text-red-400 text-[10px] font-bold cursor-pointer px-2"
+                        title="Confirm delete"
+                      >Delete?</button>
+                    ) : (
+                      <button
+                        onClick={() => setConfirmDel(i)}
+                        className="bg-transparent border-0 text-[#9a9aa6] text-sm cursor-pointer px-2 hover:text-red-400"
+                        title="Remove cheat"
+                      >🗑</button>
+                    )}
                   </li>
                 ))
               )}
             </ul>
 
             {editing === null ? (
-              <button onClick={startAdd} className="btn-default w-full">+ Add cheat</button>
+              <button onClick={startAdd} className="btn w-full">+ Add cheat</button>
             ) : (
-              <div className="bg-[#0e0e12] border border-[#2a2a30] rounded-md p-3 space-y-2">
-                <div className="text-[10px] uppercase tracking-widest opacity-50">{editing === -1 ? 'New cheat' : 'Editing'}</div>
+              <div className="well p-3 space-y-2">
+                <div className="eyebrow">{editing === -1 ? 'New cheat' : 'Editing'}</div>
                 <input
                   type="text"
                   placeholder="Name (e.g. Infinite money)"
                   value={draft.name}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                  className="w-full bg-[#1c1c22] border border-[#2a2a30] rounded p-2 text-xs text-[#d8d8e0]"
+                  className="input w-full"
                 />
                 <textarea
                   placeholder={`Paste cheat codes — one per line.\nFormat: XXXXXXXX YYYYYYYY\n\nExample:\n02001234 000000FF`}
                   value={draft.code}
                   onChange={(e) => setDraft({ ...draft, code: e.target.value })}
                   rows={5}
-                  className="w-full bg-[#1c1c22] border border-[#2a2a30] rounded p-2 text-[11px] text-[#d8d8e0] font-mono"
+                  className="input w-full font-mono"
                 />
                 <div className="flex items-center justify-between text-[10px]">
                   <div className="opacity-60">
@@ -164,8 +166,8 @@ export function CheatsPanel({ open, gameCode, cheats, onChange, onClose }: Props
                     {draftParsed.length === 0 && draft.code.trim() && <span className="text-red-300">malformed code</span>}
                   </div>
                   <div className="flex gap-2">
-                    <button onClick={cancelEdit} className="btn-default !text-[10px]">Cancel</button>
-                    <button onClick={commit} className="btn-default !text-[10px]">Save</button>
+                    <button onClick={cancelEdit} className="btn !text-[10px]">Cancel</button>
+                    <button onClick={commit} className="btn btn-primary !text-[10px]">Save</button>
                   </div>
                 </div>
               </div>
@@ -179,8 +181,7 @@ export function CheatsPanel({ open, gameCode, cheats, onChange, onClose }: Props
             </div>
           </>
         )}
-        </ErrorBoundary>
-      </div>
-    </div>
+      </ErrorBoundary>
+    </Modal>
   );
 }

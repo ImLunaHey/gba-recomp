@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Emulator } from '../emulator';
 import { SignalTransport } from '../io/sio-signal';
 import { LocalLoopback } from '../io/sio';
+import { Modal } from './Modal';
 
 interface Props {
   open: boolean;
@@ -55,8 +56,6 @@ export function LinkPanel({ open, emu, onClose }: Props) {
     };
   }, [open, emu]);
 
-  if (!open) return null;
-
   const active = getActive(emu.io.sio);
   const connected = active?.isConnected() ?? false;
 
@@ -100,83 +99,71 @@ export function LinkPanel({ open, emu, onClose }: Props) {
   };
 
   return (
-    <div
-      className="fixed inset-0 bg-black/70 flex items-center justify-center z-[1000]"
-      onClick={onClose}
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Link Cable"
+      subtitle={active ? (connected ? 'peer connected' : 'waiting for peer…') : 'not connected'}
+      size="sm"
     >
-      <div
-        className="bg-[#14141a] border border-[#2a2a30] rounded-lg p-5 w-full max-w-[460px] mx-2 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex justify-between items-center mb-4 pb-3 border-b border-[#2a2a30]">
-          <div>
-            <div className="text-sm font-bold tracking-wider">Link Cable</div>
-            <div className="text-[11px] opacity-50 mt-0.5">
-              {active ? (connected ? 'peer connected' : 'waiting for peer…') : 'not connected'}
-            </div>
+      {!active && (
+        <div className="text-[11px] space-y-3">
+          <div className="opacity-70 leading-relaxed">
+            Connects two browsers over WebRTC. One side creates a room and
+            shares the code; the other side joins with it. Trades and
+            turn-based play work; real-time racing is wobbly until the next
+            sync upgrade lands.
           </div>
-          <button onClick={onClose} className="bg-transparent border-0 text-[#d8d8e0] text-xl cursor-pointer px-2 hover:text-white">×</button>
+          <button
+            onClick={onCreate}
+            disabled={busy}
+            className="btn btn-primary w-full py-2.5"
+          >Create room</button>
+          <div className="text-[10px] opacity-40 text-center">or</div>
+          <div className="flex gap-2">
+            <input
+              value={roomInput}
+              onChange={(e) => setRoomInput(e.target.value.toUpperCase())}
+              placeholder="Room code"
+              maxLength={6}
+              className="input flex-1 font-mono uppercase tracking-widest"
+            />
+            <button onClick={onJoin} disabled={busy} className="btn px-4">Join</button>
+          </div>
         </div>
+      )}
 
-        {!active && (
-          <div className="text-[11px] space-y-3">
-            <div className="opacity-70 leading-relaxed">
-              Connects two browsers over WebRTC. One side creates a room and
-              shares the code; the other side joins with it. Trades and
-              turn-based play work; real-time racing is wobbly until the next
-              sync upgrade lands.
+      {active && (
+        <div className="text-[11px] space-y-3">
+          <div className="flex items-center gap-2">
+            <div className="opacity-50">Room</div>
+            <div className="font-mono text-base tracking-widest select-all well px-3 py-1.5">
+              {roomInput || '—'}
             </div>
             <button
-              onClick={onCreate}
-              disabled={busy}
-              className="btn-default w-full py-2"
-            >Create room</button>
-            <div className="text-[10px] opacity-40 text-center">or</div>
-            <div className="flex gap-2">
-              <input
-                value={roomInput}
-                onChange={(e) => setRoomInput(e.target.value.toUpperCase())}
-                placeholder="Room code"
-                maxLength={6}
-                className="flex-1 px-2 py-1.5 bg-[#1c1c22] border border-[#2a2a30] rounded text-xs font-mono uppercase"
-              />
-              <button onClick={onJoin} disabled={busy} className="btn-default px-4">Join</button>
+              onClick={() => navigator.clipboard?.writeText(roomInput).catch(() => {})}
+              className="btn text-[10px]"
+              disabled={!roomInput}
+            >Copy</button>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="opacity-50">Status</div>
+            <div className={connected ? 'text-green-400' : 'text-yellow-400'}>
+              {connected ? '● connected' : '● searching'}
             </div>
           </div>
-        )}
+          <LinkDebug emu={emu} />
 
-        {active && (
-          <div className="text-[11px] space-y-3">
-            <div className="flex items-center gap-2">
-              <div className="opacity-50">Room</div>
-              <div className="font-mono text-base tracking-widest select-all bg-[#1c1c22] px-3 py-1.5 rounded border border-[#2a2a30]">
-                {roomInput || '—'}
-              </div>
-              <button
-                onClick={() => navigator.clipboard?.writeText(roomInput).catch(() => {})}
-                className="btn-default text-[10px]"
-                disabled={!roomInput}
-              >Copy</button>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="opacity-50">Status</div>
-              <div className={connected ? 'text-green-400' : 'text-yellow-400'}>
-                {connected ? '● connected' : '● searching'}
-              </div>
-            </div>
-            <LinkDebug emu={emu} />
+          <button
+            onClick={onDisconnect}
+            disabled={busy}
+            className="btn btn-danger w-full py-2"
+          >Disconnect</button>
+        </div>
+      )}
 
-            <button
-              onClick={onDisconnect}
-              disabled={busy}
-              className="btn-default w-full py-2 !text-red-300"
-            >Disconnect</button>
-          </div>
-        )}
-
-        {error && <div className="mt-3 text-[10px] text-red-400">{error}</div>}
-      </div>
-    </div>
+      {error && <div className="mt-3 text-[10px] text-red-400">{error}</div>}
+    </Modal>
   );
 }
 

@@ -1,5 +1,6 @@
 import { useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { Key, Keypad } from '../io/keypad';
+import { haptics } from './haptics';
 
 interface Props { keypad: Keypad; }
 
@@ -16,6 +17,7 @@ function HoldButton({ keypad, k, className, children, ariaLabel }: BtnProps) {
   const press = (e: ReactPointerEvent) => {
     e.preventDefault();
     keypad.press(k);
+    if (e.pointerType === 'touch') haptics.tap();
     ref.current?.setPointerCapture(e.pointerId);
   };
   const release = (e: ReactPointerEvent) => {

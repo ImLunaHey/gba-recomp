@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Emulator } from '../emulator';
 import { ErrorBoundary } from './ErrorBoundary';
+import { Modal } from './Modal';
 
 interface Props {
   open: boolean;
@@ -10,48 +11,34 @@ interface Props {
 
 type Tab = 'cpu' | 'mem' | 'palette' | 'tiles' | 'sprites' | 'io' | 'adv';
 
+const TABS: Tab[] = ['cpu', 'mem', 'palette', 'tiles', 'sprites', 'io', 'adv'];
+
 export function DebugPanel({ open, emu, onClose }: Props) {
   const [tab, setTab] = useState<Tab>('cpu');
 
-  if (!open) return null;
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[1000]" onClick={onClose}>
-      <div
-        className="bg-[#14141a] border border-[#2a2a30] rounded-lg p-4 w-full max-w-[860px] mx-2 max-h-[90vh] overflow-hidden shadow-2xl flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex justify-between items-center mb-3 pb-2 border-b border-[#2a2a30]">
-          <div className="text-sm font-bold tracking-wider">Debug</div>
-          <button onClick={onClose} className="bg-transparent border-0 text-[#d8d8e0] text-lg cursor-pointer px-2 hover:text-white">×</button>
-        </div>
-        <div className="flex gap-1 mb-3 text-[11px]">
-          {(['cpu', 'mem', 'palette', 'tiles', 'sprites', 'io', 'adv'] as Tab[]).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`px-3 py-1.5 rounded-md border transition-colors ${
-                tab === t
-                  ? 'bg-[#3a3a5a] border-[#5060a0] text-white'
-                  : 'bg-[#1c1c22] border-[#2a2a30] text-[#9a9aa6] hover:bg-[#24242a]'
-              }`}
-            >{t.toUpperCase()}</button>
-          ))}
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          {/* resetKey=tab so switching tabs after a crash clears the
-              fallback and gives the new view a clean try. */}
-          <ErrorBoundary label={`Debug · ${tab.toUpperCase()}`} resetKey={tab} onClose={onClose} variant="inline">
-            {tab === 'cpu'     && <CpuView emu={emu} />}
-            {tab === 'mem'     && <MemoryView emu={emu} />}
-            {tab === 'palette' && <PaletteView emu={emu} />}
-            {tab === 'tiles'   && <TilesView emu={emu} />}
-            {tab === 'sprites' && <SpritesView emu={emu} />}
-            {tab === 'io'      && <IoView emu={emu} />}
-            {tab === 'adv'     && <AdvancedView emu={emu} />}
-          </ErrorBoundary>
-        </div>
+    <Modal open={open} onClose={onClose} title="Debug" size="xl" scrollBody={false}>
+      <div className="seg mb-3">
+        {TABS.map((t) => (
+          <button key={t} onClick={() => setTab(t)} data-active={tab === t} className="seg-item font-medium">
+            {t.toUpperCase()}
+          </button>
+        ))}
       </div>
-    </div>
+      <div className="flex-1 overflow-y-auto -mx-1 px-1">
+        {/* resetKey=tab so switching tabs after a crash clears the
+            fallback and gives the new view a clean try. */}
+        <ErrorBoundary label={`Debug · ${tab.toUpperCase()}`} resetKey={tab} onClose={onClose} variant="inline">
+          {tab === 'cpu'     && <CpuView emu={emu} />}
+          {tab === 'mem'     && <MemoryView emu={emu} />}
+          {tab === 'palette' && <PaletteView emu={emu} />}
+          {tab === 'tiles'   && <TilesView emu={emu} />}
+          {tab === 'sprites' && <SpritesView emu={emu} />}
+          {tab === 'io'      && <IoView emu={emu} />}
+          {tab === 'adv'     && <AdvancedView emu={emu} />}
+        </ErrorBoundary>
+      </div>
+    </Modal>
   );
 }
 
@@ -142,7 +129,7 @@ function MemoryView({ emu }: { emu: Emulator }) {
         <select
           value={regionIdx}
           onChange={(e) => { setRegionIdx(Number(e.target.value)); setOffsetHex('0'); }}
-          className="bg-[#1c1c22] border border-[#2a2a30] text-[#d8d8e0] py-1 px-2 rounded font-mono text-[11px]"
+          className="input font-mono"
         >
           {regions.map(([n, b], i) => (
             <option key={i} value={i}>{n.padEnd(6)} 0x{hex(b)}</option>
@@ -152,18 +139,18 @@ function MemoryView({ emu }: { emu: Emulator }) {
         <input
           value={offsetHex}
           onChange={(e) => setOffsetHex(e.target.value)}
-          className="bg-[#1c1c22] border border-[#2a2a30] text-[#d8d8e0] py-1 px-2 rounded font-mono text-[11px] w-20"
+          className="input font-mono w-20"
         />
         <button
           onClick={() => setOffsetHex(Math.max(0, offset - ROWS * 16).toString(16))}
-          className="btn-default !text-[10px]"
+          className="btn !text-[10px]"
         >◀ Page</button>
         <button
           onClick={() => setOffsetHex(Math.min(size - ROWS * 16, offset + ROWS * 16).toString(16))}
-          className="btn-default !text-[10px]"
+          className="btn !text-[10px]"
         >Page ▶</button>
       </div>
-      <div className="bg-[#0e0e12] border border-[#1c1c20] rounded p-2 overflow-x-auto">
+      <div className="well p-2 overflow-x-auto">
         <div className="text-[10px] opacity-50 mb-1">
           {`${name}  0x${hex(base + offset)}  ${name === 'ROM' ? '(read-only)' : ''}`}
         </div>
@@ -296,21 +283,21 @@ function TilesView({ emu }: { emu: Emulator }) {
   return (
     <div className="text-[11px]">
       <div className="flex gap-2 items-center mb-3 text-xs">
-        <select value={base} onChange={(e) => setBase(e.target.value as 'bg' | 'obj')} className="bg-[#1c1c22] border border-[#2a2a30] py-1 px-2 rounded">
+        <select value={base} onChange={(e) => setBase(e.target.value as 'bg' | 'obj')} className="input">
           <option value="bg">BG VRAM (0x06000000)</option>
           <option value="obj">OBJ VRAM (0x06010000)</option>
         </select>
-        <select value={bpp} onChange={(e) => setBpp(Number(e.target.value) as 4 | 8)} className="bg-[#1c1c22] border border-[#2a2a30] py-1 px-2 rounded">
+        <select value={bpp} onChange={(e) => setBpp(Number(e.target.value) as 4 | 8)} className="input">
           <option value={4}>4bpp</option>
           <option value={8}>8bpp</option>
         </select>
         {bpp === 4 && (
-          <select value={palBank} onChange={(e) => setPalBank(Number(e.target.value))} className="bg-[#1c1c22] border border-[#2a2a30] py-1 px-2 rounded">
+          <select value={palBank} onChange={(e) => setPalBank(Number(e.target.value))} className="input">
             {Array.from({ length: 16 }, (_, i) => <option key={i} value={i}>Pal bank {i}</option>)}
           </select>
         )}
       </div>
-      <div className="bg-[#0e0e12] border border-[#1c1c20] rounded p-2 inline-block">
+      <div className="well p-2 inline-block">
         <canvas
           ref={canvasRef}
           style={{ imageRendering: 'pixelated', width: bpp === 4 ? 512 : 256, height: bpp === 4 ? 512 : 256 }}
@@ -358,9 +345,9 @@ function SpritesView({ emu }: { emu: Emulator }) {
       <div className="text-[10px] opacity-60 mb-2">
         {visibleCount} / 128 OAM entries visible on screen
       </div>
-      <div className="bg-[#0e0e12] border border-[#1c1c20] rounded text-[10px] font-mono overflow-y-auto max-h-[480px]">
+      <div className="well text-[10px] font-mono overflow-y-auto max-h-[480px]">
         <table className="w-full">
-          <thead className="sticky top-0 bg-[#0e0e12] border-b border-[#1c1c20]">
+          <thead className="sticky top-0 bg-[var(--color-sunken)] border-b border-[#1c1c20]">
             <tr className="text-left opacity-70">
               <th className="px-2 py-1">#</th>
               <th className="px-2 py-1">Pos</th>
@@ -512,10 +499,14 @@ function AdvancedView({ emu }: { emu: Emulator }) {
         >Clear JIT cache</button>
       </div>
       <div className="text-[10px] opacity-50 leading-relaxed">
-        The JIT compiles hot THUMB basic blocks to WebAssembly. Only Format
-        3/4/9 ALU + Format 16/18 branches are translated today; everything
-        else still goes through the interpreter, as do all ARM blocks. If a
-        game misbehaves, turn this off and reload the ROM.
+        The JIT compiles hot basic blocks to WebAssembly: every THUMB
+        format (1-16, 18, 19) except SWI, and nearly all of ARM:
+        data-processing (all operand forms, conditional, PC-relative),
+        branches (B/BL/BX), loads/stores (LDR/STR, LDRH/STRH/LDRSB/LDRSH),
+        block transfer (LDM/STM), and MUL/MLA. Only the registers a block
+        touches are synced across the dispatch boundary. SWI, long
+        multiply, MRS/MSR and SWP still interpret. If a game misbehaves,
+        turn this off and reload.
       </div>
     </div>
   );

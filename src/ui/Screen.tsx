@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type MutableRefObject } from 'react';
 import type { Emulator } from '../emulator';
 import type { AudioSink } from './audio';
 
@@ -7,6 +7,13 @@ interface Props {
   paused: boolean;
   audio: AudioSink;
   onStats: (s: string) => void;
+  /** Emulation speed multiplier (1 = realtime). >1 = fast-forward. */
+  speed?: number;
+  /** When false, the canvas is bilinear-smoothed instead of pixelated. */
+  smooth?: boolean;
+  /** Screen writes a single-frame-advance fn here for the parent's
+      frame-step control to call while paused. */
+  stepRef?: MutableRefObject<(() => void) | null>;
 }
 
 // GBA refreshes at 59.7275 Hz. On a 120 Hz / ProMotion display rAF
@@ -17,13 +24,24 @@ interface Props {
 const GBA_FRAME_MS = 1000 / 59.7275;
 const MAX_FRAMES_PER_RAF = 4;
 
-export function Screen({ emu, paused, audio, onStats }: Props) {
+export function Screen({ emu, paused, audio, onStats, speed = 1, smooth = false, stepRef }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext('2d')!;
     const imageData = ctx.createImageData(240, 160);
+    const blit = () => { imageData.data.set(emu.ppu.frame); ctx.putImageData(imageData, 0, 0); };
+
+    // Expose a one-frame advance for the parent's frame-step button.
+    // Drains (but doesn't play) audio so the FIFO doesn't back up.
+    if (stepRef) {
+      stepRef.current = () => {
+        emu.runFrame();
+        emu.sound.drainOutput();
+        blit();
+      };
+    }
 
     let lastTs = performance.now();
     let accumMs = 0;
@@ -41,24 +59,26 @@ export function Screen({ emu, paused, audio, onStats }: Props) {
       lastTs = ts;
       if (paused) { accumMs = 0; return; }
 
-      accumMs += dt;
-      if (accumMs > GBA_FRAME_MS * MAX_FRAMES_PER_RAF) {
-        accumMs = GBA_FRAME_MS * MAX_FRAMES_PER_RAF;
-      }
+      // Advance emulator time at `speed`× wall-clock. Fast-forward
+      // raises the per-rAF frame cap so 2×/4× actually keep up instead
+      // of being clamped to realtime.
+      accumMs += dt * speed;
+      const frameCap = GBA_FRAME_MS * MAX_FRAMES_PER_RAF * Math.max(1, Math.ceil(speed));
+      if (accumMs > frameCap) accumMs = frameCap;
       let didFrame = false;
       while (accumMs >= GBA_FRAME_MS) {
         lastR = emu.runFrame();
         accumMs -= GBA_FRAME_MS;
         didFrame = true;
         blitted++;
-        // Drain the sound output for this frame into the Web Audio sink.
+        // Drain the sound output for this frame. At non-realtime speeds
+        // we still drain (so the FIFO doesn't back up) but skip pushing
+        // to the sink — feeding it faster/slower than realtime just
+        // thrashes the look-ahead buffer into garbled audio.
         const samples = emu.sound.drainOutput();
-        if (samples.length > 0) audio.push(samples, emu.sound.sampleRate);
+        if (speed === 1 && samples.length > 0) audio.push(samples, emu.sound.sampleRate);
       }
-      if (didFrame) {
-        imageData.data.set(emu.ppu.frame);
-        ctx.putImageData(imageData, 0, 0);
-      }
+      if (didFrame) blit();
       const sinceStat = ts - lastStatTs;
       if (sinceStat >= 500) {
         const inst = blitted * 1000 / sinceStat;
@@ -79,8 +99,12 @@ export function Screen({ emu, paused, audio, onStats }: Props) {
       }
     };
     raf = requestAnimationFrame(loop);
-    return () => { stop = true; cancelAnimationFrame(raf); };
-  }, [emu, paused, onStats]);
+    return () => {
+      stop = true;
+      cancelAnimationFrame(raf);
+      if (stepRef) stepRef.current = null;
+    };
+  }, [emu, paused, onStats, speed, stepRef]);
 
-  return <canvas ref={canvasRef} id="screen" width={240} height={160} />;
+  return <canvas ref={canvasRef} id="screen" className={smooth ? 'smooth' : ''} width={240} height={160} />;
 }

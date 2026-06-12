@@ -1,6 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { GBA_KEYS, labelFor, loadMap, resetMap, saveMap } from './controllerMap';
+import {
+  keyLabel,
+  loadKeyboardMapRaw,
+  resetKeyboardMap,
+  saveKeyboardMap,
+} from './keyboardMap';
 import { ErrorBoundary } from './ErrorBoundary';
+import { Modal } from './Modal';
+import { padSelect } from './padSelect';
+
+interface PadInfo { index: number; id: string; mapping: string; }
+// Trim the long HID descriptor down to something readable for a chip.
+function shortPadName(id: string): string {
+  return id.replace(/\s*\(.*\)\s*/, '').trim() || id;
+}
 
 interface PadSnapshot {
   id: string;
@@ -21,8 +35,18 @@ export function ControllerPanel({ open, onClose, onChange }: Props) {
   const [editingKey, setEditingKey] = useState<number | null>(null);
   const [mapping, setMapping] = useState<string>('sony');
   const [bindings, setBindings] = useState<Record<number, number>>({});
+  const [pads, setPads] = useState<PadInfo[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(padSelect.get());
+  // Keyboard remapping: GBA-key → KeyboardEvent.key. Separate from the
+  // gamepad bindings above; persisted via keyboardMap.ts.
+  const [kbBindings, setKbBindings] = useState<Record<number, string>>(() => loadKeyboardMapRaw());
+  const [kbEditingKey, setKbEditingKey] = useState<number | null>(null);
   const rafRef = useRef(0);
   const lastPressedRef = useRef<Set<number>>(new Set());
+
+  // Keep the local highlight of the active selection in sync with the
+  // shared store (also updated by auto-fallback on disconnect).
+  useEffect(() => padSelect.subscribe(() => setActiveId(padSelect.get())), []);
 
   // Live poll the gamepad while open.
   useEffect(() => {
@@ -31,9 +55,13 @@ export function ControllerPanel({ open, onClose, onChange }: Props) {
     const tick = () => {
       if (stop) return;
       rafRef.current = requestAnimationFrame(tick);
-      const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-      let pad: Gamepad | null = null;
-      for (const p of pads) { if (p && p.connected) { pad = p; break; } }
+      const raw = navigator.getGamepads ? navigator.getGamepads() : [];
+      const connected: Gamepad[] = [];
+      for (const p of raw) if (p && p.connected) connected.push(p);
+      setPads(connected.map((p) => ({ index: p.index, id: p.id, mapping: p.mapping || 'sony' })));
+      // Inspect the pinned pad if it's connected; otherwise the first.
+      const wantId = padSelect.get();
+      const pad: Gamepad | null = (wantId && connected.find((p) => p.id === wantId)) || connected[0] || null;
       if (!pad) { setSnap(null); return; }
       const pressed = pad.buttons.map((b) => b.pressed);
       const values  = pad.buttons.map((b) => b.value);
@@ -98,55 +126,113 @@ export function ControllerPanel({ open, onClose, onChange }: Props) {
     return () => window.removeEventListener('keydown', onEsc);
   }, [editingKey, bindings, mapping, onChange]);
 
-  if (!open) return null;
-
   const onReset = () => {
     const def = resetMap(mapping);
     setBindings(def);
     onChange?.();
   };
 
+  // Reload the keyboard bindings whenever the panel re-opens, in case
+  // they changed elsewhere.
+  useEffect(() => {
+    if (open) setKbBindings(loadKeyboardMapRaw());
+  }, [open]);
+
+  // While editing a keyboard binding, the next keydown binds that key.
+  // Esc cancels (leaves the binding untouched). If the pressed key was
+  // already bound elsewhere, drop it there first — one key per action.
+  useEffect(() => {
+    if (kbEditingKey === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Escape') { setKbEditingKey(null); return; }
+      const next: Record<number, string> = {};
+      for (const [k, v] of Object.entries(kbBindings)) {
+        if (v !== e.key && Number(k) !== kbEditingKey) next[Number(k)] = v;
+      }
+      next[kbEditingKey] = e.key;
+      setKbBindings(next);
+      saveKeyboardMap(next);
+      setKbEditingKey(null);
+      onChange?.();
+    };
+    // Capture phase so we win over the player's gameplay handler.
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [kbEditingKey, kbBindings, onChange]);
+
+  const onKbReset = () => {
+    setKbBindings(resetKeyboardMap());
+    setKbEditingKey(null);
+    onChange?.();
+  };
+
   return (
-    <div
-      className="fixed inset-0 bg-black/70 flex items-center justify-center z-[1000]"
-      onClick={onClose}
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Controller"
+      subtitle={snap ? `${snap.id} · ${snap.mapping}` : 'No controller detected'}
+      size="lg"
     >
-      <div
-        className="bg-[#14141a] border border-[#2a2a30] rounded-lg p-5 w-full max-w-[760px] mx-2 max-h-[88vh] overflow-y-auto shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex justify-between items-center mb-4 pb-3 border-b border-[#2a2a30]">
-          <div>
-            <div className="text-sm font-bold tracking-wider">Controller</div>
-            <div className="text-[11px] opacity-50 mt-0.5">
-              {snap ? `${snap.id} · ${snap.mapping}` : 'No controller detected'}
+      <ErrorBoundary label="Controller" onClose={onClose} variant="inline">
+        {pads.length > 0 && (
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="eyebrow">Active controller</div>
+              <div className="text-[10px] opacity-50">{pads.length} connected</div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => padSelect.set(null)}
+                className={activeId === null ? 'btn btn-primary !text-[10px]' : 'btn !text-[10px]'}
+                title="Any connected controller drives input"
+              >Any</button>
+              {pads.map((p) => (
+                <button
+                  key={p.index}
+                  onClick={() => padSelect.set(p.id)}
+                  className={activeId === p.id ? 'btn btn-primary !text-[10px]' : 'btn !text-[10px]'}
+                  title={p.id}
+                >P{p.index + 1} · {shortPadName(p.id)}</button>
+              ))}
+            </div>
+            <div className="text-[10px] opacity-50 mt-2 leading-relaxed">
+              “Any” lets every connected pad control the game (pass the
+              controller around). Pick one to pin input to it. The diagram
+              and bindings below follow the selected pad.
             </div>
           </div>
-          <button onClick={onClose} className="bg-transparent border-0 text-[#d8d8e0] text-xl cursor-pointer px-2 hover:text-white">×</button>
-        </div>
+        )}
 
-        <ErrorBoundary label="Controller" onClose={onClose} variant="inline">
-          {!snap ? (
-            <div className="py-12 text-center opacity-50 text-xs leading-relaxed">
-              Connect a gamepad and press any button to wake it.<br />
-              <span className="text-[10px] opacity-70">PS5 DualSense, Xbox controller, or any USB/Bluetooth pad will work.</span>
-            </div>
-          ) : (
-            <>
-              <PadDiagram snap={snap} />
-              <BindingTable
-                snap={snap}
-                bindings={bindings}
-                editingKey={editingKey}
-                onEdit={setEditingKey}
-                onReset={onReset}
-              />
-              <RawSignals snap={snap} />
-            </>
-          )}
-        </ErrorBoundary>
-      </div>
-    </div>
+        {!snap ? (
+          <div className="py-12 text-center opacity-50 text-xs leading-relaxed">
+            Connect a gamepad and press any button to wake it.<br />
+            <span className="text-[10px] opacity-70">PS5 DualSense, Xbox controller, or any USB/Bluetooth pad will work.</span>
+          </div>
+        ) : (
+          <>
+            <PadDiagram snap={snap} />
+            <BindingTable
+              snap={snap}
+              bindings={bindings}
+              editingKey={editingKey}
+              onEdit={setEditingKey}
+              onReset={onReset}
+            />
+            <RawSignals snap={snap} />
+          </>
+        )}
+
+        <KeyboardBindingTable
+          bindings={kbBindings}
+          editingKey={kbEditingKey}
+          onEdit={setKbEditingKey}
+          onReset={onKbReset}
+        />
+      </ErrorBoundary>
+    </Modal>
   );
 }
 
@@ -424,6 +510,56 @@ function BindingTable({
         Click a binding to rebind it, then press any button on the controller.
         Esc unbinds the key. If you bind a button that's already in use, it's
         auto-removed from its previous binding.
+      </div>
+    </div>
+  );
+}
+
+// Keyboard remapping table — mirrors BindingTable, but each row binds a
+// physical keyboard key (KeyboardEvent.key) to a GBA key. Clicking a row
+// enters "press a key…" mode; the next keydown binds it.
+function KeyboardBindingTable({
+  bindings, editingKey, onEdit, onReset,
+}: {
+  bindings: Record<number, string>;
+  editingKey: number | null;
+  onEdit: (key: number | null) => void;
+  onReset: () => void;
+}) {
+  return (
+    <div className="mt-6 pt-4 border-t border-[#1c1c20]">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-[10px] uppercase tracking-widest opacity-50">Keyboard</div>
+        <button
+          onClick={onReset}
+          className="text-[10px] uppercase tracking-wider opacity-50 hover:opacity-100 bg-transparent border-0 cursor-pointer"
+        >reset to defaults</button>
+      </div>
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+        {GBA_KEYS.map(({ key, name }) => {
+          const isEditing = editingKey === key;
+          return (
+            <button
+              key={key}
+              onClick={() => onEdit(isEditing ? null : key)}
+              className={`flex justify-between items-center px-3 py-2 rounded-md text-[11px] border transition-all cursor-pointer text-left ${
+                isEditing
+                  ? 'bg-[#3a3a5a] border-[#5060a0] animate-pulse'
+                  : 'bg-[#1c1c22] border-[#2a2a30] hover:bg-[#24242a]'
+              }`}
+            >
+              <span className="font-medium">{name}</span>
+              <span className={`text-[10px] ${isEditing ? 'text-[#ffeb70]' : 'opacity-70'}`}>
+                {isEditing ? 'press a key…' : keyLabel(bindings[key])}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="mt-4 text-[10px] opacity-50 leading-relaxed">
+        Click a binding to rebind it, then press a key. Esc cancels. Binding a
+        key that's already in use moves it from its previous action. Tab,
+        F2/F4, “.” and Backspace are reserved for emulator controls.
       </div>
     </div>
   );

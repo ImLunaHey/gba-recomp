@@ -6,6 +6,7 @@ import { AudioSink } from './audio';
 import { EmuContext } from './EmuContext';
 import { LibraryPage } from './LibraryPage';
 import { PlayerPage } from './PlayerPage';
+import { ToastProvider } from './Toast';
 import { queryClient, persister } from './queryClient';
 
 // Routes:
@@ -29,13 +30,15 @@ export function App() {
       persistOptions={{ persister, maxAge: 7 * 24 * 60 * 60 * 1000 }}
     >
       <EmuContext.Provider value={{ emu: emuRef.current, audio: audioRef.current }}>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<LibraryPage />} />
-            <Route path="/play/:romId" element={<PlayerPage />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </BrowserRouter>
+        <ToastProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/" element={<LibraryPage />} />
+              <Route path="/play/:romId" element={<PlayerPage />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </BrowserRouter>
+        </ToastProvider>
       </EmuContext.Provider>
     </PersistQueryClientProvider>
   );

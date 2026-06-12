@@ -1,29 +1,80 @@
 @import "tailwindcss";
 
-/* Tokens carried forward from the original UI so dark mode / colors
-   stay consistent. Component classes that are reused several places
-   are kept as @apply blocks; one-off styling lives inline. */
+/* ─────────────────────────────────────────────────────────────────
+   Design tokens. A small, layered surface palette + one cool accent
+   keeps the whole UI coherent. Reusable component classes live as
+   @apply / plain-CSS blocks; one-off styling stays inline.
+   ───────────────────────────────────────────────────────────────── */
 @theme {
+  /* Surfaces, darkest → lightest. bg is the page, sunken is for
+     inset wells (hex dumps, code editors), card/card-hover for raised
+     panels and controls. */
   --color-bg: #0a0a0c;
+  --color-sunken: #0e0e12;
+  --color-card: #16161c;
+  --color-card-hover: #20202a;
+  --color-elevated: #1c1c24;
+  --color-border: #2a2a32;
+  --color-border-strong: #3a3a46;
+
+  /* Text */
   --color-fg: #e7e7ea;
-  --color-card: #1c1c22;
-  --color-card-hover: #24242a;
-  --color-border: #2a2a30;
   --color-muted: #9a9aa6;
+  --color-faint: #6a6a76;
+
+  /* Accent + semantic */
   --color-accent: #9be7ff;
+  --color-accent-strong: #5fd0ff;
+  --color-accent-deep: #2a4a6a;
+  --color-success: #5fd08a;
+  --color-danger: #ff8080;
+  --color-warn: #ffcf70;
+
+  --shadow-panel: 0 24px 60px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.02);
 }
 
 :root { color-scheme: dark; }
+
 html, body { @apply m-0 p-0 h-full; background: var(--color-bg); color: var(--color-fg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-body { @apply flex flex-col items-center gap-3; padding: 16px 8px; }
+body {
+  @apply flex flex-col items-center gap-3;
+  padding: 16px 8px;
+  /* Subtle vignette so the dark page has some depth behind the screen. */
+  background:
+    radial-gradient(120% 80% at 50% -10%, rgba(95, 208, 255, 0.05), transparent 60%),
+    var(--color-bg);
+}
 @media (max-width: 480px) {
   body { padding: 8px 4px; gap: 8px; }
 }
 
-/* GBA framebuffer canvas. The GBA is 240×160 (3:2) — at desktop we
-   draw it at 3× (720×480), but on narrow viewports we scale down
-   while preserving aspect ratio. Pixelated rendering is preserved at
-   every size. */
+/* Global focus ring — keyboard-only, so mouse users don't see it. */
+:focus-visible {
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Custom scrollbars — thin, themed, unobtrusive. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+*::-webkit-scrollbar { width: 9px; height: 9px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: #4a4a58; background-clip: padding-box; }
+
+/* ─────────────────────────────────────────────────────────────────
+   GBA framebuffer canvas. The GBA is 240×160 (3:2); at desktop we draw
+   it at 3× (720×480) and scale down on narrow viewports, preserving
+   aspect ratio and pixelation at every size.
+   ───────────────────────────────────────────────────────────────── */
 canvas#screen {
   image-rendering: pixelated;
   image-rendering: crisp-edges;
@@ -32,13 +83,35 @@ canvas#screen {
   height: auto;
   background: #000;
   border: 1px solid #1c1c20;
-  box-shadow: 0 0 60px rgba(0, 0, 0, 0.7);
+  border-radius: 6px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 20px 70px -10px rgba(0, 0, 0, 0.8),
+    0 0 90px -20px rgba(95, 208, 255, 0.12);
 }
+/* Bilinear-smoothed scaling when the user opts out of pixel-perfect. */
+canvas#screen.smooth { image-rendering: auto; }
 
-/* Fullscreen container: black backdrop centered around the canvas.
-   `:fullscreen` styles the container when the Fullscreen API has
-   promoted it; otherwise the container is transparent and we hand
-   layout off to body's flex column. */
+/* Screen wrapper — shrinks to the canvas (inline-block) so it doesn't
+   alter the canvas's own sizing or the fullscreen scale rules, but
+   gives the CRT/LCD overlay a positioned box to sit in. */
+.screen-wrap { position: relative; display: inline-block; line-height: 0; }
+/* Retro LCD pixel-grid overlay: faint horizontal scanlines + a lighter
+   vertical grid, multiplied over the image. pointer-events:none so it
+   never intercepts input. */
+.crt-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: 6px;
+  mix-blend-mode: multiply;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.28) 0 1px, transparent 1px 3px),
+    repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.14) 0 1px, transparent 1px 3px);
+}
+.fs-container:fullscreen .crt-overlay { border-radius: 0; }
+
+/* Fullscreen container: black backdrop centered around the canvas. */
 .fs-container { display: contents; }
 .fs-container:fullscreen {
   display: flex;
@@ -49,59 +122,277 @@ canvas#screen {
   background: #000;
 }
 .fs-container:fullscreen canvas#screen {
-  /* Scale to fill the larger axis of the viewport while keeping the
-     3:2 aspect. width = min(viewport-width, viewport-height * 3/2)
-     picks whichever bound applies; height follows from aspect-ratio.
-     `width: auto` would just fall back to the canvas's intrinsic
-     240×160 — which is why the previous build kept the game tiny. */
   width: min(100vw, calc(100vh * 3 / 2));
   height: auto;
   aspect-ratio: 3 / 2;
   max-width: none;
   max-height: none;
   border: none;
+  border-radius: 0;
   box-shadow: none;
 }
 
-/* On-screen gamepad button — base + variants. */
+/* ─────────────────────────────────────────────────────────────────
+   On-screen gamepad.
+   ───────────────────────────────────────────────────────────────── */
 .gp-btn {
   width: 36px; height: 36px; padding: 0;
   font-size: 13px; font-weight: bold;
   user-select: none; touch-action: none;
-  background: var(--color-card); color: var(--color-fg);
-  border: 1px solid var(--color-border); border-radius: 4px;
+  background: linear-gradient(180deg, var(--color-card-hover), var(--color-card));
+  color: var(--color-fg);
+  border: 1px solid var(--color-border); border-radius: 6px;
   cursor: pointer;
-  transition: background 50ms, border-color 50ms, color 50ms;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04);
+  transition: background 60ms, border-color 60ms, color 60ms, transform 60ms;
 }
-.gp-btn.pressed { background: #3a3a5a; border-color: #5060a0; color: #fff; }
-.gp-btn.dpad-mid { background: #14141a; cursor: default; }
+.gp-btn:active { transform: translateY(1px); }
+.gp-btn.pressed { background: #3a3a5a; border-color: #5060a0; color: #fff; box-shadow: 0 0 10px rgba(80,96,160,0.5); }
+.gp-btn.dpad-mid { background: #14141a; cursor: default; box-shadow: none; }
 .gp-shoulder { width: 64px; }
 .gp-pill { width: 64px; height: 22px; border-radius: 11px; font-size: 9px; letter-spacing: 0.1em; }
 .gp-ab { width: 48px; height: 48px; border-radius: 24px; font-size: 18px; }
-.gp-a { background: #5a3030; border-color: #804040; }
-.gp-a.pressed { background: #aa4040; border-color: #d05050; }
-.gp-b { background: #305a30; border-color: #408040; }
-.gp-b.pressed { background: #40aa40; border-color: #50d050; }
+.gp-a { background: linear-gradient(180deg, #6a3838, #5a3030); border-color: #804040; }
+.gp-a.pressed { background: #aa4040; border-color: #d05050; box-shadow: 0 0 12px rgba(208,80,80,0.5); }
+.gp-b { background: linear-gradient(180deg, #386a38, #305a30); border-color: #408040; }
+.gp-b.pressed { background: #40aa40; border-color: #50d050; box-shadow: 0 0 12px rgba(80,208,80,0.5); }
 
-/* Layout helpers reused across screens. */
-.btn-default {
+/* ─────────────────────────────────────────────────────────────────
+   Buttons. `.btn` is the base; variants layer color on top. Legacy
+   `.btn-default` is kept as an alias of the neutral button so existing
+   markup keeps working.
+   ───────────────────────────────────────────────────────────────── */
+.btn, .btn-default {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   background: var(--color-card);
   color: var(--color-fg);
   border: 1px solid var(--color-border);
   padding: 6px 12px;
   font-family: inherit;
   font-size: 11px;
+  line-height: 1;
   cursor: pointer;
-  border-radius: 4px;
-  transition: background 100ms;
+  border-radius: 6px;
+  white-space: nowrap;
+  transition: background 100ms, border-color 100ms, color 100ms, transform 60ms, box-shadow 100ms;
 }
-.btn-default:hover:not(:disabled) { background: var(--color-card-hover); }
-.btn-default:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn:hover:not(:disabled), .btn-default:hover:not(:disabled) {
+  background: var(--color-card-hover);
+  border-color: var(--color-border-strong);
+}
+.btn:active:not(:disabled), .btn-default:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled, .btn-default:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* GBA gamepad grid. Shrinks with the viewport so it never overflows
-   the screen on a phone, but the touch targets stay at their full
-   36 px size (drawing them smaller would hurt usability — instead we
-   tighten the gaps so the whole control rig still fits ~360 px wide). */
+/* Primary — the one emphasized action in a context. */
+.btn-primary {
+  background: linear-gradient(180deg, var(--color-accent-strong), #3fb8ee);
+  border-color: var(--color-accent-strong);
+  color: #052436;
+  font-weight: 700;
+}
+.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #7fdcff, var(--color-accent-strong));
+  border-color: #7fdcff;
+  box-shadow: 0 0 16px -2px rgba(95, 208, 255, 0.5);
+}
+
+/* Danger — destructive actions. */
+.btn-danger { color: var(--color-danger); }
+.btn-danger:hover:not(:disabled) {
+  background: rgba(180, 50, 50, 0.18);
+  border-color: rgba(220, 90, 90, 0.5);
+  color: #ffb0b0;
+}
+
+/* Ghost — chromeless text button for low-emphasis actions. */
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-muted);
+}
+.btn-ghost:hover:not(:disabled) { background: var(--color-card); color: var(--color-fg); }
+
+/* Icon-only square button (e.g. modal close). */
+.btn-icon {
+  width: 28px; height: 28px; padding: 0;
+  font-size: 16px; border-radius: 6px;
+  background: transparent; border-color: transparent;
+  color: var(--color-muted);
+}
+.btn-icon:hover:not(:disabled) { background: var(--color-card); color: var(--color-fg); }
+
+/* Text inputs / textareas / selects share one look. */
+.input {
+  background: var(--color-sunken);
+  border: 1px solid var(--color-border);
+  color: var(--color-fg);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-family: inherit;
+  font-size: 11px;
+  transition: border-color 100ms, box-shadow 100ms;
+}
+.input:focus {
+  outline: none;
+  border-color: var(--color-accent-strong);
+  box-shadow: 0 0 0 3px rgba(95, 208, 255, 0.12);
+}
+.input::placeholder { color: var(--color-faint); }
+
+/* Segmented control — used for tab strips (Debug panel, etc.). */
+.seg { display: inline-flex; gap: 2px; padding: 3px; background: var(--color-sunken); border: 1px solid var(--color-border); border-radius: 8px; flex-wrap: wrap; }
+.seg-item {
+  padding: 5px 11px;
+  font-size: 11px;
+  border-radius: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+  transition: background 100ms, color 100ms;
+}
+.seg-item:hover { color: var(--color-fg); }
+.seg-item[data-active="true"] { background: var(--color-accent-deep); color: var(--color-accent); box-shadow: inset 0 0 0 1px rgba(95,208,255,0.25); }
+
+/* ─────────────────────────────────────────────────────────────────
+   Modal shell (shared by every panel via <Modal>). Backdrop blurs the
+   page; the panel fades + scales in.
+   ───────────────────────────────────────────────────────────────── */
+@keyframes modal-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-panel-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+  background: rgba(4, 4, 8, 0.6);
+  backdrop-filter: blur(6px);
+  animation: modal-backdrop-in 120ms ease-out;
+}
+.modal-panel {
+  background: var(--color-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-panel);
+  width: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: modal-panel-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.modal-header {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--color-border);
+}
+.modal-title { font-size: 13px; font-weight: 700; letter-spacing: 0.08em; }
+.modal-subtitle { font-size: 11px; color: var(--color-muted); margin-top: 3px; }
+.modal-body { padding: 16px 18px; overflow-y: auto; flex: 1; }
+/* Controller/keyboard focus inside a panel needs to be visible even for
+   programmatic .focus() (which doesn't trigger :focus-visible), so the
+   gamepad's DOM-focus navigation shows where the cursor is. */
+.modal-panel :focus { outline: 2px solid var(--color-accent-strong); outline-offset: 2px; border-radius: 6px; }
+
+/* On phones, dialogs become bottom sheets: pinned to the bottom edge,
+   full width, rounded only on top, sliding up from below. Easier to
+   reach one-handed and feels native on touch. */
+@keyframes modal-sheet-in {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+@media (max-width: 560px) {
+  .modal-backdrop { align-items: flex-end; padding: 0; }
+  .modal-panel {
+    max-width: none !important;
+    max-height: 92vh;
+    border-radius: 16px 16px 0 0;
+    border-bottom: none;
+    animation: modal-sheet-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    /* Snap-back after a swipe-to-dismiss drag that didn't cross the
+       threshold (the drag itself sets transition:none inline). */
+    transition: transform 0.2s ease-out;
+  }
+  /* Grab-handle affordance above the header. */
+  .modal-panel::before {
+    content: "";
+    display: block;
+    width: 36px; height: 4px;
+    margin: 8px auto 0;
+    border-radius: 2px;
+    background: var(--color-border-strong);
+  }
+}
+
+/* Card surface used for grouped content inside panels. */
+.well {
+  background: var(--color-sunken);
+  border: 1px solid #1c1c20;
+  border-radius: 8px;
+}
+
+/* Section eyebrow label. */
+.eyebrow { font-size: 10px; text-transform: uppercase; letter-spacing: 0.15em; color: var(--color-faint); }
+
+/* ─────────────────────────────────────────────────────────────────
+   Toasts. Fixed bottom-center stack; each slides up + fades in, and
+   on dismissal plays the reverse. Tap to dismiss early.
+   ───────────────────────────────────────────────────────────────── */
+.toast-stack {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  z-index: 3000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.toast {
+  pointer-events: auto;
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 14px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  color: var(--color-fg);
+  background: var(--color-elevated);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255,255,255,0.03);
+  cursor: pointer;
+  max-width: 100%;
+  animation: toast-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.toast-leaving { animation: toast-in 200ms cubic-bezier(0.4, 0, 1, 1) reverse forwards; }
+.toast-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toast-icon {
+  flex-shrink: 0;
+  width: 18px; height: 18px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  font-size: 11px; font-weight: 700;
+}
+.toast-info    { border-color: var(--color-border-strong); }
+.toast-info    .toast-icon { background: var(--color-accent-deep); color: var(--color-accent); }
+.toast-success { border-color: rgba(95, 208, 138, 0.4); }
+.toast-success .toast-icon { background: rgba(95, 208, 138, 0.2); color: var(--color-success); }
+.toast-error   { border-color: rgba(255, 128, 128, 0.45); }
+.toast-error   .toast-icon { background: rgba(255, 128, 128, 0.2); color: var(--color-danger); }
+
+/* ─────────────────────────────────────────────────────────────────
+   GBA gamepad grid layout.
+   ───────────────────────────────────────────────────────────────── */
 .gamepad {
   display: grid;
   grid-template-columns: auto 1fr auto;
