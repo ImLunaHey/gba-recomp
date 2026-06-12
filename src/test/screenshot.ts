@@ -300,9 +300,11 @@ for (let i = 0; i < frames; i++) {
     break;
   }
   // Match browser behavior: drain sound output after each frame so the
-  // 2048-sample cap doesn't masquerade as a real rate measurement.
+  // output-buffer cap doesn't masquerade as a real rate measurement.
+  // outputLen counts floats and the buffer is interleaved stereo, so
+  // halve it to get sample FRAMES (what the rate audit compares).
   if (i === 0) (globalThis as any).__cycStart = emu.cpu.cycles;
-  totalSamplesProduced += emu.sound.outputLen;
+  totalSamplesProduced += emu.sound.outputLen / 2;
   emu.sound.outputLen = 0;
   pcSeen.add(emu.cpu.state.r[15] & ~3);
   lastPc = emu.cpu.state.r[15];

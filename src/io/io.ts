@@ -48,6 +48,25 @@ export class Io implements IoBridge {
     const v16 = this.read16(addr & ~1);
     return (addr & 1) ? (v16 >>> 8) & 0xFF : v16 & 0xFF;
   }
+  // Sound block byte writes need special handling: FIFO ports push a
+  // single byte, wave RAM is byte-addressable, and PSG register RMW
+  // must merge against the raw write-latch — the generic read16-based
+  // RMW below would merge against the MASKED readback and zero the
+  // write-only bits (length, frequency) in the untouched byte.
+  private soundWrite8(addr: number, v: number): boolean {
+    const sound = this.sound;
+    if (!sound || addr < 0x060 || addr > 0x0A7) return false;
+    if (addr >= 0x0A0) {
+      if (addr < 0x0A4) sound.pushA(v); else sound.pushB(v);
+      return true;
+    }
+    if (addr >= 0x090) { sound.ch3.writeRam8(addr - 0x090, v); return true; }
+    if (addr >= 0x086 && addr <= 0x08F) return false; // SOUNDBIAS / gaps → raw
+    const cur = sound.rawRead16(addr & ~1);
+    const nv = (addr & 1) ? ((cur & 0x00FF) | (v << 8)) : ((cur & 0xFF00) | v);
+    sound.writeReg16(addr & ~1, nv);
+    return true;
+  }
   read32(addr: number): number {
     return ((this.read16(addr) | (this.read16(addr + 2) << 16)) >>> 0);
   }
@@ -62,6 +81,7 @@ export class Io implements IoBridge {
       this.cpu.halt();
       return;
     }
+    if (this.soundWrite8(addr, v)) return;
     const cur = this.read16(addr & ~1);
     const nv = (addr & 1) ? ((cur & 0x00FF) | (v << 8)) : ((cur & 0xFF00) | v);
     this.write16(addr & ~1, nv);
@@ -73,6 +93,14 @@ export class Io implements IoBridge {
 
   read16(addr: number): number {
     addr &= 0x3FE;
+    // Sound block: PSG + control regs 0x060-0x084 (GBATEK read masks,
+    // live SOUNDCNT_X channel-active flags) and wave RAM 0x090-0x09E
+    // (reads the non-playing bank). SOUNDBIAS (0x088) and the unused
+    // 0x08A-0x08E words stay on the raw mirror.
+    if (this.sound &&
+        ((addr >= 0x060 && addr <= 0x086) || (addr >= 0x090 && addr <= 0x09E))) {
+      return this.sound.readReg16(addr);
+    }
     switch (addr) {
       case 0x000: return this.ppu.dispcnt;
       case 0x004: return this.ppu.readDispstat();
@@ -135,13 +163,18 @@ export class Io implements IoBridge {
       return;
     }
     // Sound block 0x060-0x0AF.
-    //   0x082 SOUNDCNT_H (DirectSound control: volume ratio, L/R enable, timer-sel, FIFO reset)
-    //   0x084 SOUNDCNT_X (master enable bit 7)
+    //   0x060..0x07E PSG channels 1-4 (tone+sweep, tone, wave, noise)
+    //   0x080 SOUNDCNT_L (PSG master L/R volume + per-channel L/R enables)
+    //   0x082 SOUNDCNT_H (PSG ratio + DirectSound control: volume ratio, L/R enable, timer-sel, FIFO reset)
+    //   0x084 SOUNDCNT_X (master enable bit 7; bits 0-3 read-only active flags)
+    //   0x090..0x09F wave RAM (banked; CPU accesses the non-playing bank)
     //   0x0A0..0x0A3 FIFO_A (4 bytes each MMIO write)
     //   0x0A4..0x0A7 FIFO_B
     if (this.sound) {
-      if (addr === 0x082) { this.sound.writeSoundcntH(v); this.raw16[addr >>> 1] = v & ~0x8800; return; }
-      if (addr === 0x084) { this.sound.writeSoundcntX(v); this.raw16[addr >>> 1] = v; return; }
+      if ((addr >= 0x060 && addr <= 0x084) || (addr >= 0x090 && addr <= 0x09E)) {
+        this.sound.writeReg16(addr, v);
+        return;
+      }
       if (addr === 0x0A0 || addr === 0x0A2) {
         this.sound.pushA(v & 0xFF);
         this.sound.pushA((v >> 8) & 0xFF);

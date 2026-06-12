@@ -54,7 +54,6 @@ export class Emulator {
     this.cpu = new Cpu(this.bus);
     this.io = new Io(this.bus, this.ppu, this.dma, this.timers, this.irq, this.keypad, this.cpu);
     this.sound = new Sound(this.dma);
-    this.sound.timers = this.timers;
     this.timers.sound = this.sound;
     this.io.sound = this.sound;
     this.bios = new BiosHle(this.cpu, this.bus);
@@ -163,6 +162,7 @@ export class Emulator {
       }
       ppu.step(i);
       timers.step(i);
+      this.sound.step(i);
       this.io.sio.step(i);
       executed += i;
       if (ppu.frameDone) { ppu.frameDone = false; break; }
