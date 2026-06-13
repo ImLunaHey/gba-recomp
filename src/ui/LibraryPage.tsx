@@ -41,6 +41,7 @@ export function LibraryPage() {
   const [log, setLog] = useState<string[]>([]);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<'recent' | 'name' | 'size'>('recent');
+  const [favOnly, setFavOnly] = useState(false);
   const append = (msg: string) => setLog((p) => [...p, msg]);
 
   // Search + sort the library client-side. `recent` = newest import
@@ -48,12 +49,13 @@ export function LibraryPage() {
   // `size` = largest cart first.
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const filtered = q
+    let filtered = q
       ? roms.filter((r: RomMeta) =>
           (r.title || '').toLowerCase().includes(q) ||
           (r.filename || '').toLowerCase().includes(q) ||
           (r.code || '').toLowerCase().includes(q))
       : roms.slice();
+    if (favOnly) filtered = filtered.filter((r: RomMeta) => fav.has(r.id));
     filtered.sort((a: RomMeta, b: RomMeta) => {
       // Favorites always float to the top, then the chosen order.
       const fa = fav.has(a.id), fb = fav.has(b.id);
@@ -63,7 +65,7 @@ export function LibraryPage() {
       return (b.addedAt || 0) - (a.addedAt || 0);
     });
     return filtered;
-  }, [roms, query, sort, fav]);
+  }, [roms, query, sort, fav, favOnly]);
 
   // Most recently opened game (set by the player on load) — surfaced as
   // a "Continue playing" hero when it's still in the library.
@@ -238,6 +240,12 @@ export function LibraryPage() {
               <option value="name">Name (A→Z)</option>
               <option value="size">Size (large→small)</option>
             </select>
+            <button
+              onClick={() => setFavOnly((v) => !v)}
+              className={favOnly ? 'btn btn-primary' : 'btn'}
+              title="Show favorites only"
+              aria-pressed={favOnly}
+            >{favOnly ? '★' : '☆'} Favorites</button>
           </div>
         )}
 
