@@ -17,13 +17,30 @@
  * Bump CACHE_VERSION whenever the caching behaviour changes so old caches get
  * cleaned up on activate.
  */
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const CACHE_NAME = `gba-recomp-${CACHE_VERSION}`;
+
+// Dev-host kill switch. The `portless` dev proxy serves the app at
+// `*.localhost`, where a cache-first SW intercepts Vite's `/@vite/client`,
+// `/src/*.tsx`, `/@react-refresh` module requests and replays stale/corrupt
+// copies (NS_ERROR_CORRUPTED_CONTENT). On any dev host this SW refuses to
+// install, passes every fetch straight through, and unregisters itself +
+// purges caches — so a stale registration self-heals on the next navigation
+// (the browser always update-checks /sw.js against the network).
+const DEV_HOST =
+  self.location.hostname === 'localhost' ||
+  self.location.hostname === '127.0.0.1' ||
+  self.location.hostname === '0.0.0.0' ||
+  self.location.hostname.endsWith('.localhost');
 
 // Minimal app shell. Hashed JS/CSS bundles are picked up by runtime caching.
 const PRECACHE_URLS = ['/', '/index.html', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (event) => {
+  if (DEV_HOST) {
+    self.skipWaiting();
+    return;
+  }
   event.waitUntil(
     caches
       .open(CACHE_NAME)
@@ -36,6 +53,18 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
+  if (DEV_HOST) {
+    // Self-destruct on dev: drop all caches, claim clients (so this no-op SW
+    // controls the page instead of the old cache-first one), then unregister.
+    event.waitUntil(
+      caches
+        .keys()
+        .then((keys) => Promise.all(keys.map((k) => caches.delete(k))))
+        .then(() => self.clients.claim())
+        .then(() => self.registration.unregister()),
+    );
+    return;
+  }
   event.waitUntil(
     caches
       .keys()
@@ -57,6 +86,9 @@ function isStaticAsset(url) {
 }
 
 self.addEventListener('fetch', (event) => {
+  // Dev host: never intercept — let Vite's module/HMR requests hit the network.
+  if (DEV_HOST) return;
+
   const { request } = event;
 
   // Only handle GET; let the browser deal with everything else.
