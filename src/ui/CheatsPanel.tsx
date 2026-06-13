@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Cheat } from '../io/cheats';
 import { parseCheat } from '../io/cheats';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -74,6 +74,38 @@ export function CheatsPanel({ open, gameCode, cheats, onChange, onClose }: Props
     if (editing === i) cancelEdit();
   };
 
+  // Export the game's cheats as a JSON file (round-trips with import).
+  const onExport = () => {
+    const blob = new Blob([JSON.stringify(cheats, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${gameCode || 'gba'}-cheats.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  // Import cheats from a JSON file (array of {name, code, enabled?}, or a
+  // { cheats: [...] } wrapper). Appended to the existing list.
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const onImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    file.text().then((text) => {
+      const parsed = JSON.parse(text);
+      const arr: unknown[] = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.cheats) ? parsed.cheats : [];
+      const incoming: Cheat[] = arr
+        .filter((c): c is { name?: unknown; code?: unknown; enabled?: unknown } => !!c && typeof c === 'object')
+        .filter((c) => typeof c.code === 'string' && c.code.trim() !== '')
+        .map((c) => ({
+          name: typeof c.name === 'string' && c.name.trim() ? c.name : 'Imported',
+          code: c.code as string,
+          enabled: c.enabled !== false,
+        }));
+      if (incoming.length) persist([...cheats, ...incoming]);
+    }).catch(() => { /* malformed JSON — ignore */ });
+  };
+
   // Parse the current draft so we can warn about syntax problems before
   // the user saves a code that does nothing.
   const draftParsed = parseCheat(draft.code);
@@ -94,6 +126,14 @@ export function CheatsPanel({ open, gameCode, cheats, onChange, onClose }: Props
           </div>
         ) : (
           <>
+            <div className="flex items-center justify-between mb-2">
+              <div className="eyebrow">{cheats.length} cheat{cheats.length === 1 ? '' : 's'}</div>
+              <div className="flex gap-2">
+                <button onClick={() => importInputRef.current?.click()} className="btn !text-[10px]">Import</button>
+                <button onClick={onExport} disabled={cheats.length === 0} className="btn !text-[10px]">Export</button>
+              </div>
+            </div>
+            <input ref={importInputRef} type="file" accept="application/json,.json" onChange={onImport} className="hidden" />
             <ul className="space-y-1 mb-3">
               {cheats.length === 0 ? (
                 <li className="py-6 text-center opacity-50 text-xs">No cheats yet — add one below.</li>
