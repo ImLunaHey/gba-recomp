@@ -318,7 +318,10 @@ export class SignalTransport implements LinkTransport {
 }
 
 function defaultSignalingBase(): string {
-  const { protocol, host } = window.location;
-  const wsProto = protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${wsProto}//${host}`;
+  // Derive from the page origin in a browser; fall back to a relative
+  // path off-DOM (React Native) so importing the core never throws.
+  const loc = typeof window !== 'undefined' ? window.location : undefined;
+  if (!loc) return 'wss://gba-recomp.localhost';
+  const wsProto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${wsProto}//${loc.host}`;
 }
