@@ -11,6 +11,10 @@ _*.png
 tsconfig.tsbuildinfo
 coverage
 
+# rust core
+core/target
+**/*.rs.bk
+
 # wrangler files
 .wrangler
 .dev.vars*

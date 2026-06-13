@@ -7,13 +7,11 @@
   "scripts": {
     "dev": "vite",
     "dev:portless": "portless gba-recomp vite",
-    "build": "tsc && vite build",
+    "build:wasm": "wasm-pack build core --target web --out-dir pkg --release",
+    "build": "npm run build:wasm && tsc && vite build",
     "preview": "npm run build && wrangler dev",
-    "boot": "tsx src/test/boot.ts",
     "gen:cheats": "tsx scripts/gen-cheats.ts",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
+    "test": "cargo test --manifest-path core/Cargo.toml",
     "lint": "oxlint src",
     "deploy": "npm run build && wrangler deploy"
   },
